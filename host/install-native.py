@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install the Chrome status bridge for an unpacked extension directory on macOS."""
+"""Install the browser status bridge for an unpacked extension directory on macOS."""
 import argparse
 import base64
 import hashlib
@@ -8,6 +8,9 @@ import os
 from pathlib import Path
 import sys
 import shutil
+
+
+BROWSERS = ("Google/Chrome", "BraveSoftware/Brave-Browser", "Chromium", "Microsoft Edge", "Vivaldi")
 
 
 def extension_id(directory):
@@ -34,14 +37,19 @@ def main():
         shutil.copyfile(Path(__file__).resolve().parents[1] / "lib" / name, native_dir / name)
     (native_dir / "host-path.json").write_text(json.dumps(os.environ.get("PATH", os.defpath)) + "\n")
     host = native_dir / "native-status.py"
-    manifests = Path.home() / "Library/Application Support/Google/Chrome/NativeMessagingHosts"
-    manifests.mkdir(parents=True, exist_ok=True)
-    manifest = manifests / "com.agent_pr_review.status.json"
-    manifest.write_text(json.dumps({"name": "com.agent_pr_review.status",
+    manifest = json.dumps({"name": "com.agent_pr_review.status",
         "description": "Read-only T3 PR review status", "path": str(host),
-        "type": "stdio", "allowed_origins": [f"chrome-extension://{eid}/"]}, indent=2) + "\n")
-    print(f"Installed status bridge for {directory} (extension {eid})")
-    print("Reload this extension in chrome://extensions, then refresh any open PR tabs.")
+        "type": "stdio", "allowed_origins": [f"chrome-extension://{eid}/"]}, indent=2) + "\n"
+    # Chrome is always registered; other Chromium browsers only when installed.
+    # Unpacked extension IDs depend on the directory path, so one ID serves them all.
+    support = Path.home() / "Library/Application Support"
+    browsers = [browser for browser in BROWSERS if browser == BROWSERS[0] or (support / browser).is_dir()]
+    for browser in browsers:
+        manifests = support / browser / "NativeMessagingHosts"
+        manifests.mkdir(parents=True, exist_ok=True)
+        (manifests / "com.agent_pr_review.status.json").write_text(manifest)
+    print(f"Installed status bridge for {directory} (extension {eid}) in: {', '.join(browsers)}")
+    print("Reload this extension on the browser's extensions page, then refresh any open PR tabs.")
 
 
 if __name__ == "__main__":

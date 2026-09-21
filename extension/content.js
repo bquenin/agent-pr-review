@@ -178,6 +178,9 @@ function getLaunchUrl(cli, prPath) {
 function findInsertionPoint() {
   // Strategy: try multiple selectors, broadest to most specific
   const selectors = [
+    // GitHub.com React pull request header: the actions slot next to the title.
+    // data-component attributes are stable; the hashed class names are not.
+    '[data-component="PageHeader"] [data-component="PH_Actions"]',
     // GitHub.com and GHE: action buttons container in PR header
     ".gh-header-actions",
     // GHE / older GitHub: the flex row-reverse container with Edit button
@@ -323,6 +326,8 @@ function injectLauncher() {
   const target = findInsertionPoint();
   if (!target) return;
 
+  // The React header hides its empty actions slot, for example when signed out.
+  target.classList?.remove("d-none");
   target.prepend(createLauncher());
 }
 

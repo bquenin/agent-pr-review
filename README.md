@@ -185,7 +185,9 @@ bash host/install.sh
 This compiles `~/Applications/AgentPRReview.app`, registers `agent-pr-review://`,
 installs the native status bridge, and builds the extension at
 `~/.local/share/agent-pr-review/extension` with your configured hosts. In
-`chrome://extensions`, enable developer mode and load that directory unpacked.
+`chrome://extensions` (or the equivalent page in Brave, Chromium, Edge, or
+Vivaldi), enable developer mode and load that directory unpacked. The status
+bridge is registered with Chrome and with each of those browsers that is installed.
 The extension runs only on [explicitly matched hosts](https://developer.chrome.com/docs/extensions/develop/concepts/match-patterns).
 
 Changing `github_hosts` or `default_cli` on the Mac requires rerunning
