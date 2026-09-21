@@ -141,8 +141,8 @@ gh auth login --hostname github.com
 }
 ```
 
-The Mac needs Bash 5+, GNU `timeout` (Homebrew `coreutils`), Python 3.10+, Git,
-GitHub CLI and `jq`. Run `host/install.sh` from a terminal whose `PATH` includes
+The Mac needs Bash 5+, GNU `timeout` or `gtimeout` (Homebrew `coreutils`),
+Python 3.10+, Git, GitHub CLI and `jq`. Run `host/install.sh` from a terminal whose `PATH` includes
 Homebrew's `bin`: the installer saves that `PATH` so launches from Chrome resolve
 Bash 5 and these tools instead of the system Bash 3.2. Repository discovery uses
 `repo_roots` on the Mac. The T3
@@ -187,7 +187,7 @@ installs the native status bridge, and builds the extension at
 `~/.local/share/agent-pr-review/extension` with your configured hosts. In
 `chrome://extensions` (or the equivalent page in Brave, Chromium, Edge, or
 Vivaldi), enable developer mode and load that directory unpacked. The status
-bridge is registered with Chrome and with each of those browsers that is installed.
+bridge is registered for all of those browsers.
 The extension runs only on [explicitly matched hosts](https://developer.chrome.com/docs/extensions/develop/concepts/match-patterns).
 
 Changing `github_hosts` or `default_cli` on the Mac requires rerunning

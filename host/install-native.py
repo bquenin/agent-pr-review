@@ -40,15 +40,15 @@ def main():
     manifest = json.dumps({"name": "com.agent_pr_review.status",
         "description": "Read-only T3 PR review status", "path": str(host),
         "type": "stdio", "allowed_origins": [f"chrome-extension://{eid}/"]}, indent=2) + "\n"
-    # Chrome is always registered; other Chromium browsers only when installed.
+    # Register every supported Chromium browser, installed or not: a browser
+    # launched for the first time after this install must still find the bridge.
     # Unpacked extension IDs depend on the directory path, so one ID serves them all.
     support = Path.home() / "Library/Application Support"
-    browsers = [browser for browser in BROWSERS if browser == BROWSERS[0] or (support / browser).is_dir()]
-    for browser in browsers:
+    for browser in BROWSERS:
         manifests = support / browser / "NativeMessagingHosts"
         manifests.mkdir(parents=True, exist_ok=True)
         (manifests / "com.agent_pr_review.status.json").write_text(manifest)
-    print(f"Installed status bridge for {directory} (extension {eid}) in: {', '.join(browsers)}")
+    print(f"Installed status bridge for {directory} (extension {eid}) in: {', '.join(BROWSERS)}")
     print("Reload this extension on the browser's extensions page, then refresh any open PR tabs.")
 
 

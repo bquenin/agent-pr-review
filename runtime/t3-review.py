@@ -76,7 +76,7 @@ def t3_command(runtime):
     # Use the running server's exact version, even after an upgrade on disk.
     pid = int(runtime["pid"])
     if sys.platform == "darwin":
-        return t3_command_darwin(pid)
+        return t3_command_darwin(pid, runtime["origin"])
     process = Path(f"/proc/{pid}")
     binary = os.readlink(process / "exe")
     if Path(binary).name not in ("node", "nodejs"):
@@ -95,11 +95,17 @@ def t3_command(runtime):
     return [binary, str(script)]
 
 
-def t3_command_darwin(pid):
+def t3_command_darwin(pid, origin):
     # The desktop app runs Electron as Node on its server entrypoint:
     #   <bundle>/Contents/MacOS/<name> <bundle>/.../apps/server/dist/bin.mjs --bootstrap-fd N
     # ps joins arguments with spaces, so recover the entrypoint by stripping the
     # executable prefix and the trailing flags rather than splitting on spaces.
+    # A stale server-runtime.json can name a PID the OS has since reused, so
+    # only trust a process that is listening on the recorded origin.
+    port = urllib.parse.urlsplit(origin).port
+    listeners = subprocess.check_output(["/usr/sbin/lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-Fp"], timeout=10).decode()
+    if f"p{pid}\n" not in listeners + "\n":
+        raise RuntimeError(f"Process {pid} from server-runtime.json is not serving {origin}; restart T3 or set AGENT_PR_REVIEW_T3_BIN")
     def ps(column):
         return subprocess.check_output(["/bin/ps", "-ww", "-o", f"{column}=", "-p", str(pid)], timeout=10).decode().strip()
     binary, args = ps("comm"), ps("args")

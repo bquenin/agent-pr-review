@@ -127,12 +127,22 @@ class DarwinConnectionTests(unittest.TestCase):
         self.addCleanup(platform.stop)
         self.runtime = {"pid": 123, "origin": "http://127.0.0.1:3773"}
 
-    def ps(self, comm, args):
+    def ps(self, comm, args, listeners="p123\nf21\n"):
         def fake(argv, timeout):
+            if argv[0] == "/usr/sbin/lsof":
+                self.assertEqual(argv[1:], ["-nP", "-iTCP:3773", "-sTCP:LISTEN", "-Fp"])
+                return listeners.encode()
             self.assertEqual(argv[:3], ["/bin/ps", "-ww", "-o"])
             self.assertEqual(argv[4:], ["-p", "123"])
             return (comm if argv[3] == "comm=" else args).encode() + b"\n"
         return patch.object(t3.subprocess, "check_output", side_effect=fake)
+
+    def test_reused_pid_not_serving_the_origin_is_rejected_before_ps(self):
+        for listeners in ("", "p999\nf12\n", "p1234\n"):
+            with self.subTest(listeners=listeners), self.ps(self.BINARY, f"{self.BINARY} {self.SCRIPT}", listeners) as calls:
+                with self.assertRaisesRegex(RuntimeError, "not serving http://127.0.0.1:3773"):
+                    t3.t3_command(self.runtime)
+            self.assertEqual([call.args[0][0] for call in calls.call_args_list], ["/usr/sbin/lsof"])
 
     def test_packaged_app_runs_electron_as_node_on_asar_entrypoint(self):
         existing = {self.BINARY, self.BINARY.rsplit("/Contents/MacOS", 1)[0] + "/Contents/Resources/app.asar"}

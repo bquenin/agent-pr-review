@@ -284,13 +284,16 @@ claude_project_dir_name() {
 }
 
 # Run a git (or any) command with a wall-clock timeout. `timeout` is part of
-# coreutils and always present here; the fallback only keeps a stripped-down
-# container from hanging forever on a network git operation.
+# coreutils and always present on Linux; Homebrew coreutils on macOS may only
+# expose it as `gtimeout`. The fallback keeps a stripped-down container from
+# hanging forever on a network git operation.
 run_with_timeout() {
     local secs="$1"
     shift
     if command -v timeout >/dev/null 2>&1; then
         timeout "$secs" "$@"
+    elif command -v gtimeout >/dev/null 2>&1; then
+        gtimeout "$secs" "$@"
     else
         log "WARNING: coreutils timeout not found; running without a ${secs}s limit"
         "$@"
