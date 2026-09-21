@@ -4,6 +4,7 @@ import argparse
 import base64
 import hashlib
 import json
+import os
 from pathlib import Path
 import sys
 import shutil
@@ -24,16 +25,20 @@ def main():
     eid = extension_id(directory)
     native_dir = Path.home() / "Library/Application Support/AgentPRReview/native"
     native_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("native-status.py", "launch-review.py"):
+        target = native_dir / name
+        source = Path(__file__).with_name(name).read_text().split("\n", 1)[1]
+        target.write_text(f"#!{sys.executable}\n" + source)
+        target.chmod(0o755)
+    for name in ("review_config.py", "review_transport.py"):
+        shutil.copyfile(Path(__file__).resolve().parents[1] / "lib" / name, native_dir / name)
+    (native_dir / "host-path.json").write_text(json.dumps(os.environ.get("PATH", os.defpath)) + "\n")
     host = native_dir / "native-status.py"
-    source = Path(__file__).with_name("native-status.py").read_text().split("\n", 1)[1]
-    host.write_text(f"#!{sys.executable}\n" + source)
-    host.chmod(0o755)
-    shutil.copyfile(Path(__file__).resolve().parents[1] / "lib/review_config.py", native_dir / "review_config.py")
     manifests = Path.home() / "Library/Application Support/Google/Chrome/NativeMessagingHosts"
     manifests.mkdir(parents=True, exist_ok=True)
     manifest = manifests / "com.agent_pr_review.status.json"
     manifest.write_text(json.dumps({"name": "com.agent_pr_review.status",
-        "description": "Read-only T3 PR review status over SSH", "path": str(host),
+        "description": "Read-only T3 PR review status", "path": str(host),
         "type": "stdio", "allowed_origins": [f"chrome-extension://{eid}/"]}, indent=2) + "\n")
     print(f"Installed status bridge for {directory} (extension {eid})")
     print("Reload this extension in chrome://extensions, then refresh any open PR tabs.")

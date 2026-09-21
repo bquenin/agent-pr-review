@@ -1,16 +1,7 @@
 import Cocoa
 
-// Mac-side URL shim for the agent-pr-review:// scheme.
-//
-// This app does three things: validate the PR URL and hand off
-// to the launcher on the configured Linux development host:
-//
-//     ssh -t <ssh-host> -- .local/bin/agent-pr-review '<pr-url>' --cli <claude|agent>
-//
-// Everything that makes a review happen - repo discovery, worktree preparation,
-// session identity, prompt assembly, launching claude/agent - lives in vm/agent-pr-review
-// and runs in the guest, where the repos and the agent CLIs are. Behavior changes go
-// there, not here. T3 launches run over SSH without opening a terminal.
+// macOS URL shim. Shared Python code validates configuration and dispatches to
+// the Linux runtime via SSH or devcontainer exec. This app only owns Mac UI.
 
 let HOME_DIR = FileManager.default.homeDirectoryForCurrentUser.path
 let PRIMARY_URL_SCHEME = "agent-pr-review"
@@ -18,13 +9,7 @@ let REVIEW_SUPPORT_DIR_NAME = "AgentPRReview"
 let LEGACY_REVIEW_SUPPORT_DIR_NAMES = ["GitHubPRReview", "ClaudeReview"]
 let REVIEW_LOG_FILE_NAME = "agent-pr-review.log"
 
-// The ssh alias of the Linux dev host. Configurable so the same shim can target the
-// local VM or remote development host. The legacy SSH_HOST_FILE remains supported.
-let CONFIG_FILE = "\(HOME_DIR)/.config/agent-pr-review/config.json"
-let SSH_HOST_FILE = "\(HOME_DIR)/.config/agent-pr-review/ssh-host"
-// Relative on purpose: the remote command runs in the guest $HOME, and a literal ~
-// or $HOME here would be expanded by the Mac-side shell before ssh ever sees it.
-let VM_REVIEW_CLI = ".local/bin/agent-pr-review"
+let LAUNCH_HELPER = "\(HOME_DIR)/Library/Application Support/AgentPRReview/native/launch-review.py"
 
 func shellEscape(_ value: String) -> String {
     value.replacingOccurrences(of: "'", with: "'\\''")
@@ -82,34 +67,32 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func configuration() throws -> [String: Any] {
-        guard FileManager.default.fileExists(atPath: CONFIG_FILE) else { return [:] }
-        let data = try Data(contentsOf: URL(fileURLWithPath: CONFIG_FILE))
-        guard let config = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw NSError(domain: "AgentPRReview", code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Invalid config.json"])
-        }
-        return config
-    }
-
-    func resolveSSHHost(_ config: [String: Any]) -> String? {
-        let legacy = (try? String(contentsOfFile: SSH_HOST_FILE, encoding: .utf8))?
-            .split(separator: "\n").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .first(where: { !$0.isEmpty })
-        let host = config["ssh_host"] as? String ?? legacy ?? ""
-        guard host.range(of: "^[A-Za-z0-9_][A-Za-z0-9._-]*$", options: .regularExpression) != nil else {
-            showError("Set ssh_host in \(CONFIG_FILE) to your development host's SSH alias.")
+    func describeURL(_ url: String) -> [String: String]? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: LAUNCH_HELPER)
+        process.arguments = ["--describe", url]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        do {
+            try process.run()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else {
+                showError(String(data: data, encoding: .utf8) ?? "Invalid review configuration")
+                return nil
+            }
+            return try JSONSerialization.jsonObject(with: data) as? [String: String]
+        } catch {
+            showError("Could not validate review request: \(error.localizedDescription). Rerun host/install.sh.")
             return nil
         }
-        return host
     }
 
-    func launchT3(sshHost: String, prURL: String) {
-        // The remote server owns the review; leave the Mac app and focus untouched.
+    func launchT3(url: String) {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        process.arguments = ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ClearAllForwardings=yes", "--", sshHost,
-            "\(VM_REVIEW_CLI) '\(shellEscape(prURL))' --cli t3code"]
+        process.executableURL = URL(fileURLWithPath: LAUNCH_HELPER)
+        process.arguments = [url]
         let output = Pipe()
         process.standardOutput = output
         process.standardError = output
@@ -120,7 +103,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             process.waitUntilExit()
             log(String(data: data, encoding: .utf8) ?? "")
             guard process.terminationStatus == 0 else {
-                showError("Could not start the review on \(sshHost). See \(reviewLogPath()) for details.")
+                showError("Could not start the review in the configured environment. See \(reviewLogPath()) for details.")
                 return
             }
         } catch {
@@ -145,10 +128,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         tell application "iTerm2"
             activate
-            -- Launch as the session's command rather than typing into a shell:
-            -- the default profile may itself be an ssh-into-the-VM session, and
-            -- written text lands inside the guest (where ble.sh also swallows
-            -- pasted newlines into MULTILINE mode instead of executing).
+            -- Start a new process even when the default profile is a remote shell.
             if (count of windows) = 0 then
                 create window with default profile command shellCommand
             else
@@ -174,12 +154,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return process.terminationStatus == 0
     }
 
-    // agent-pr-review://<host>/<owner>/<repo>/pull/<number>?cli=claude|agent
-    //   -> https://<host>/<owner>/<repo>/pull/<number>  +  --cli <claude|agent>
-    //
-    // Validated here only so a malformed URL fails on the Mac with a log line instead
-    // of opening a terminal that immediately errors out. The VM CLI re-parses the URL
-    // and derives owner/repo/number itself; --cli selects Claude Code vs Cursor agent.
     @objc func handleURL(_ event: NSAppleEventDescriptor, withReply reply: NSAppleEventDescriptor) {
         defer { NSApplication.shared.terminate(nil) }
 
@@ -189,53 +163,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         log("Received URL: \(urlString)")
 
-        guard let components = URLComponents(string: urlString),
-              components.scheme == PRIMARY_URL_SCHEME,
-              components.user == nil, components.password == nil, components.port == nil,
-              let host = components.host?.lowercased() else {
-            log("ERROR: invalid URL")
-            return
-        }
-
-        let config: [String: Any]
-        do { config = try configuration() }
-        catch { showError(error.localizedDescription); return }
-        let hosts = (config["github_hosts"] as? [String] ?? ["github.com"]).map { $0.lowercased() }
-        guard hosts.contains(host),
-              components.percentEncodedPath.range(of: "^/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9][0-9]*$", options: .regularExpression) != nil else {
-            showError("Invalid PR URL or host missing from github_hosts in \(CONFIG_FILE).")
-            return
-        }
-        let pathParts = components.path.lowercased().split(separator: "/").map(String.init)
-        guard !pathParts.prefix(2).contains(where: { $0 == "." || $0 == ".." }) else { return }
-
-        let cliRaw = components.queryItems?
-            .first(where: { $0.name == "cli" })?
-            .value?
-            .lowercased() ?? (config["default_cli"] as? String ?? "agent")
-        let cli: String
-        switch cliRaw {
-        case "claude", "agent", "t3code":
-            cli = cliRaw
-        default:
-            showError("Unknown review backend: \(cliRaw)")
-            return
-        }
-
-        let prURL = "https://" + ([host] + pathParts).joined(separator: "/")
-        log("PR URL: \(prURL)")
-        log("CLI: \(cli)")
-
+        guard urlString.hasPrefix("\(PRIMARY_URL_SCHEME)://"),
+              let request = describeURL(urlString), let cli = request["cli"] else { return }
         ensureReviewSupportDir()
-        guard let sshHost = resolveSSHHost(config) else { return }
         if cli == "t3code" {
-            launchT3(sshHost: sshHost, prURL: prURL)
+            launchT3(url: urlString)
             return
         }
-        let remoteCommand = "\(VM_REVIEW_CLI) '\(shellEscape(prURL))' --cli '\(shellEscape(cli))'"
-        let shellCmd = "ssh -t \(sshHost) -- '\(shellEscape(remoteCommand))'"
-        log("Shell command: \(shellCmd)")
-        _ = launchITerm(shellCmd: shellCmd)
+        let shellCmd = "'\(shellEscape(LAUNCH_HELPER))' '\(shellEscape(urlString))'"
+        if !launchITerm(shellCmd: shellCmd) {
+            showError("Could not open iTerm2. See \(reviewLogPath()) for details.")
+        }
     }
 }
 

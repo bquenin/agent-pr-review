@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-spec = importlib.util.spec_from_file_location("t3_monitor", Path(__file__).parents[1] / "vm/t3_monitor.py")
+spec = importlib.util.spec_from_file_location("t3_monitor", Path(__file__).parents[1] / "runtime/t3_monitor.py")
 monitor = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(monitor)
 

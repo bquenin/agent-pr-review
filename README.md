@@ -11,70 +11,136 @@ optional.
 
 ## Supported setup
 
-- **CLI:** Linux development host with Bash 5+, Python 3.10+, Git, GitHub CLI,
-  `jq`, and GNU `timeout`. Install and authenticate the backend you want to use.
-  You do not need all three backends.
-- **Browser launcher:** macOS with Chrome, Python 3.10+, Xcode command line tools,
-  and SSH access to that Linux host. Cursor/Claude terminal launches use iTerm2;
+- **Runtime:** a Linux devcontainer, workstation, VM, or remote development host
+  with Bash 5+, Python 3.10+, Git, GitHub CLI, `jq`, and GNU `timeout`. The supplied
+  devcontainer includes these dependencies, Node.js, tmux, and the test tools.
+  Install and authenticate whichever agent backend you want inside that environment.
+- **Browser launcher:** macOS with Chrome, Python 3.10+, and Xcode command line
+  tools. Connect to a local devcontainer using the Dev Container CLI, or to any
+  Linux environment using SSH. Cursor/Claude terminal launches use iTerm2;
   T3 launches run in the background without opening a terminal.
-- **T3:** a running Linux T3 server with its authenticated orchestration HTTP API
-  and `auth session` CLI. Runtime discovery uses Linux `/proc`. T3 integration is
-  version-sensitive; `--check` below verifies connectivity. Windows and a local
-  macOS review runtime are not currently supported.
+- **T3:** run the server inside the same Linux environment as the review runtime.
+  It needs the authenticated orchestration HTTP API and `auth session` CLI.
+  Discovery uses Linux `/proc`; `--check` below verifies compatibility. Windows
+  and a local macOS review runtime are not currently supported.
 
-The test suite covers configured public and enterprise host routing using local
-fixtures. A new GHES version or T3 build should also get a live smoke test before
-being treated as supported.
+GitHub hosts and execution environments are independent: either transport can
+review GitHub.com, GHES, or GHEC. A new GHES version or T3 build should get a live
+smoke test in addition to the automated routing tests.
 
-## Install
+## Start with a devcontainer
 
-Clone this repository on each machine that runs a component:
+Clone this repository on a machine with a running Docker-compatible engine:
 
 ```bash
 git clone https://github.com/bquenin/agent-pr-review.git
 cd agent-pr-review
+npm install -g @devcontainers/cli
+devcontainer up --workspace-folder .
+devcontainer exec --workspace-folder . bash
 ```
 
-Create `~/.config/agent-pr-review/config.json` on both the Mac and development
-host. Use the same `github_hosts` list; paths and the SSH alias are local settings.
-A minimal CLI-only install can omit this file and use GitHub.com with repositories
-under `~/code`.
+Alternatively, open this checkout using **Dev Containers: Reopen in Container**
+in VS Code. The [Dev Container CLI](https://code.visualstudio.com/docs/devcontainers/devcontainer-cli)
+and VS Code use the same `.devcontainer/devcontainer.json`. Creation installs the
+review runtime automatically. Inside the container:
+
+```bash
+gh auth login --hostname github.com
+gh auth setup-git --hostname github.com
+cd ~/code
+gh repo clone OWNER/REPOSITORY
+# Install and authenticate your chosen agent backend here, then:
+agent-pr-review 'https://github.com/OWNER/REPOSITORY/pull/42'
+```
+
+Use that backend's Linux installation instructions. Backends and their accounts
+are not bundled into the image. Target project build tools also belong in your
+container configuration. You can instead install `bash runtime/install.sh` inside
+an existing project devcontainer and point the browser bridge at that workspace.
+
+A named Docker volume preserves `/home/vscode`, including clones, review
+worktrees, configuration, agent sessions, and authentication, across container
+rebuilds. Each local workspace has its own volume. Deleting that volume deletes
+its saved state; back up anything you need first. Software installed elsewhere
+in the container must be included in its image or reinstalled after rebuilding.
+The supplied configuration does not mount your host home, credentials, or Docker
+socket. Authenticate inside it, or configure your own credential forwarding.
+Stopping the container stops review processes; saved T3 watchers restart when
+it starts again. The T3 server itself must be running before they can reconnect.
+
+For a CLI-only setup, no Mac bridge or SSH server is needed. For browser launches,
+create `~/.config/agent-pr-review/config.json` **on the Mac**:
+
+```json
+{
+  "transport": "devcontainer",
+  "devcontainer_workspace": "~/code/agent-pr-review",
+  "github_hosts": ["github.com"]
+}
+```
+
+Set `devcontainer_workspace` to the actual **Mac path** of the workspace whose
+container you started. Repository discovery uses `repo_roots` **inside the
+container**, defaulting to `~/code`. Both the Mac and runtime have their own
+configuration; use the same `github_hosts` list on each. The browser bridge calls
+`devcontainer exec` against the running container. Start it with `devcontainer up`
+or VS Code before using the review button; status polling never creates or starts
+containers.
+
+## Use an existing Linux environment over SSH
+
+The same runtime can be installed on any Linux workstation, VM, or remote host:
+
+```bash
+git clone https://github.com/bquenin/agent-pr-review.git
+cd agent-pr-review
+bash runtime/install.sh
+gh auth login --hostname github.com
+```
+
+Background T3 launches and status polling need noninteractive SSH authentication.
+Terminal launches can prompt for authentication. Install your chosen backend and keep `~/.local/bin` on `PATH`. On the Mac, select
+an alias from your SSH configuration:
+
+```json
+{
+  "transport": "ssh",
+  "ssh_host": "dev-host",
+  "github_hosts": ["github.com"]
+}
+```
+
+Git fetch credentials must work for each clone's remote. The runtime uses existing
+Git/GitHub CLI authentication and does not store tokens in its config. GitHub CLI's
+[authentication environment variables](https://cli.github.com/manual/gh_help_environment)
+can override stored authentication, so use host-appropriate credentials when
+setting them yourself.
+
+## GitHub Enterprise configuration
+
+For either runtime, add your hosts to `github_hosts` in the Mac and Linux
+`~/.config/agent-pr-review/config.json`, then authenticate inside Linux:
 
 ```json
 {
   "github_hosts": ["github.com", "github.example.com", "octocorp.ghe.com"],
-  "ssh_host": "dev-host",
   "repo_roots": ["~/code"],
-  "default_cli": "agent",
-  "posting_policy": "review-only",
-  "monitor": false,
-  "trust_worktrees": false
+  "default_cli": "agent"
 }
 ```
 
-Replace the example enterprise hosts with your actual hosts, or omit them.
-`github_hosts` contains exact names without schemes, ports or wildcards. GHEC
-organizations on GitHub.com use `github.com`; enterprises with a dedicated
-`*.ghe.com` domain configure that exact domain. See [GitHub's GHEC
+Merge these settings with your Mac transport configuration. Replace the example
+hosts with your actual hosts; exact names are required without schemes, ports or
+wildcards. GHEC organizations on GitHub.com use `github.com`; enterprises with a
+dedicated `*.ghe.com` domain configure that exact domain. See [GitHub's GHEC
 hosting documentation](https://docs.github.com/en/enterprise-cloud@latest/admin/overview/about-github-enterprise-cloud).
+Run `gh auth login --hostname <host>` for each host. Private certificates, network
+access, SSH settings, and organization instructions stay in your local environment.
 
-On the **Linux development host**, authenticate GitHub CLI for each host and
-install the runtime:
+## Install the Mac browser bridge
 
-```bash
-gh auth login --hostname github.com
-gh auth login --hostname github.example.com
-bash vm/install.sh
-```
-
-Git fetch credentials must also work for each clone's remote. The launcher uses
-existing Git/GitHub CLI authentication; it does not store tokens in its config.
-GitHub CLI's [authentication environment variables](https://cli.github.com/manual/gh_help_environment)
-can override stored authentication, so use host-appropriate credentials when
-setting them yourself. Ensure `~/.local/bin` is on `PATH`.
-
-On the **Mac**, set `ssh_host` to a working alias from your SSH configuration and
-install the browser bridge:
+After configuring either transport, run on the Mac:
 
 ```bash
 bash host/install.sh
@@ -93,9 +159,9 @@ Keep the generated extension in the same directory: its unpacked Chrome ID and
 native messaging registration depend on that path. Source files are never edited
 by installation.
 
-Each installer deploys only its own machine. Re-run the relevant installer after
+Each installer deploys only its own environment. Re-run the relevant installer after
 source updates; installed runtime files are copies. T3 watcher supervision is
-optional: `bash vm/install.sh --enable-supervision` adds a marked cron entry
+optional: `bash runtime/install.sh --enable-supervision` adds a marked cron entry
 without replacing other jobs. Existing saved watchers are restarted on install.
 
 ## Use
@@ -129,8 +195,10 @@ same worktree simultaneously. Clean cached worktrees older than 60 days can be
 removed during a later launch; their branches are retained.
 
 If tmux is installed, terminal reviews run in the `agents` session by default and
-survive SSH disconnects. Use `--no-tmux` to run directly, or
-`--tmux-session reviews` to choose a session. Without tmux, keep the terminal open
+survive terminal disconnects while the Linux environment stays running. Standard
+tmux attachment works in VS Code and ordinary terminals; set `tmux_control_mode`
+to `true` in the runtime configuration to use iTerm control mode. Use `--no-tmux`
+to run directly, or `--tmux-session reviews` to choose a session. Without tmux, keep the terminal open
 while reviewing or monitoring.
 
 ## Configuration
@@ -142,7 +210,11 @@ Unknown keys and invalid types fail validation. Settings are read on each launch
 | --- | --- | --- |
 | `github_hosts` | `["github.com"]` | Hosts permitted by launchers and browser bridge |
 | `repo_roots` | `["~/code"]` | Local clone search roots |
-| `ssh_host` | empty | Mac-to-Linux SSH alias; required for browser launches |
+| `transport` | `ssh` | Browser bridge transport: `devcontainer` or `ssh`; CLI-only use ignores this |
+| `ssh_host` | empty | SSH alias, required when using SSH transport |
+| `devcontainer_workspace` | empty | Mac path of the workspace containing your devcontainer configuration |
+| `devcontainer_command` | `devcontainer` | Dev Container CLI executable name or absolute path |
+| `tmux_control_mode` | `false` | Use iTerm control mode instead of standard tmux attachment |
 | `default_cli` | `agent` | `agent`, `claude`, or `t3code` |
 | `claude_model`, `claude_effort` | empty | Omit flags and use the CLI defaults unless configured |
 | `cursor_model` | empty | Cursor CLI model override |
@@ -155,9 +227,11 @@ Unknown keys and invalid types fail validation. Settings are read on each launch
 | `remote_host_aliases` | `{}` | Map Git SSH host aliases to their actual GitHub host |
 | `legacy_host` | empty | Host to which old, hostless sessions and worktrees belong |
 
-`AGENT_PR_REVIEW_RESOURCES` can relocate runtime resources on the Linux host;
+`AGENT_PR_REVIEW_RESOURCES` can relocate runtime resources inside Linux;
 use the same value for install and launch. The Mac native status bridge currently
-uses the default remote resource directory. `AGENT_PR_REVIEW_TMUX_SESSION` changes
+uses the default runtime resource directory. The Mac installer saves its terminal
+`PATH` so Chrome and Launch Services can find Node.js, Docker, and the Dev Container
+CLI; rerun it after moving those tools. `AGENT_PR_REVIEW_TMUX_SESSION` changes
 the default tmux session. `NODE_EXTRA_CA_CERTS` remains supported directly.
 
 For example, an organization can preserve autonomous reviews and internal skill
@@ -205,7 +279,7 @@ the prompt asks for cleanup only when local work can be preserved.
 
 ### T3
 
-T3 must be running on the Linux host. Check connectivity without launching a review:
+T3 must be running inside the same Linux environment as the runtime. Check connectivity without launching a review:
 
 ```bash
 python3 ~/.local/share/agent-pr-review/t3-review.py --check
@@ -237,9 +311,11 @@ python3 ~/.local/share/agent-pr-review/t3_monitor.py --stop '<thread-uuid>'
 Keep existing clone paths, installed state and T3 settings. Before reinstalling:
 
 1. Add all your GitHub hosts to `github_hosts` on both machines.
-2. Set `ssh_host`, or retain the old `~/.config/agent-pr-review/ssh-host` file.
+2. Existing SSH setups keep working with the default `transport: "ssh"`.
+   Set `ssh_host`, or retain the old `~/.config/agent-pr-review/ssh-host` file.
    An explicit JSON value takes precedence. There is no implicit SSH destination.
 3. Choose `default_cli`, model overrides and policy explicitly. To preserve the
+   previous iTerm tab behavior, enable `tmux_control_mode` on the runtime. For
    previous autonomous behavior, set `posting_policy` to `approve`, `monitor` to
    `true`, and enable `trust_worktrees` only if you want the old trust behavior.
 4. Set `legacy_host` on the Linux host to the one GitHub host used by your old
@@ -247,8 +323,8 @@ Keep existing clone paths, installed state and T3 settings. Before reinstalling:
    resume at their original path, and Cursor mappings are copied to host-qualified
    keys on a real launch. Other hosts get distinct state. If old sessions span
    multiple hosts, leave this unset and start fresh sessions; old files stay intact.
-5. Reinstall both components, load the generated extension directory, and remove
-   the old unpacked extension to avoid duplicate buttons. Reselect your backend
+5. Reinstall both components (`vm/install.sh` remains a compatibility alias),
+   load the generated extension directory, and remove the old unpacked extension to avoid duplicate buttons. Reselect your backend
    if Chrome assigns the generated extension a new ID.
 
 T3 thread identities already include the full PR URL and repository root. With
@@ -262,21 +338,24 @@ bash tools/check.sh
 
 Checks require Python, Node.js 20+, Bash, Git, `jq` and ShellCheck; macOS also
 requires Swift. Tests use local repositories and simulated API responses without
-GitHub credentials. CI runs on Linux and macOS. See [CONTRIBUTING.md](CONTRIBUTING.md).
+GitHub credentials. CI runs on Linux and macOS and builds and tests the
+devcontainer on Linux. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ```
-extension/   Chrome content script and native status worker
-host/        macOS URL handler, native bridge, installer
-lib/         shared configuration, URL validation and repository discovery
-vm/          Linux launcher, backend adapters and monitors
-prompts/     shared review methodology and autonomous posting rules
-tools/       extension build and local checks
+.devcontainer/ Linux environment and persistent home volume
+extension/     Chrome content script and native status worker
+host/          macOS URL handler, native bridge, installer
+lib/           shared configuration, validation, transports and repository discovery
+runtime/       Linux launcher, backend adapters and monitors
+prompts/       shared review methodology and autonomous posting rules
+tools/         extension build and local checks
 ```
 
 ## Troubleshooting and uninstall
 
 Launch diagnostics appear in the terminal. Mac bridge logs are at
-`~/Library/Application Support/AgentPRReview/agent-pr-review.log`. Check SSH,
+`~/Library/Application Support/AgentPRReview/agent-pr-review.log`. Check the
+selected transport (`devcontainer exec` or SSH),
 `gh auth status --hostname <host>`, backend authentication and `--print-cmd`
 output before changing permissions.
 
@@ -287,9 +366,9 @@ marked T3 monitor line from `crontab -e` if supervision was enabled. Then remove
   `~/Library/Application Support/AgentPRReview`,
   `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.agent_pr_review.status.json`,
   and the unpacked extension from Chrome.
-- Linux: `~/.local/bin/agent-pr-review` and `~/.local/share/agent-pr-review`.
+- Linux environment: `~/.local/bin/agent-pr-review` and `~/.local/share/agent-pr-review`.
 
-Configuration is under `~/.config/agent-pr-review` on each machine. Preserve it
+Configuration is under `~/.config/agent-pr-review` in each environment. Preserve it
 and any review worktrees/transcripts you still need. The launcher adds
 `.agent-pr-review/` and `.agent-pr-review-fetched-at` to the global Git ignore file;
 remove those entries if no longer needed. Cursor and Claude authentication and

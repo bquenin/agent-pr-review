@@ -276,7 +276,7 @@ def worker(path):
 
 
 def install_cron(root):
-    # development host does not run systemd --user. Cron supervises only our saved watchers;
+    # Optional cron supervision covers only our saved watchers;
     # flock prevents overlap, and each worker survives disconnects on its own.
     marker = "# agent-pr-review T3 monitor " + str(root)
     result = subprocess.run(["crontab", "-l"], capture_output=True, text=True)

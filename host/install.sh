@@ -3,11 +3,8 @@
 # Install the Mac side: compile the agent-pr-review:// URL shim into an app bundle
 # and register the scheme with Launch Services.
 #
-# This script is host-only on purpose. It does NOT deploy anything into the VM.
-# The VM launcher is installed from the VM's own checkout with vm/install.sh, so
-# each side has exactly one source of truth. (An earlier version scp'd the launcher
-# from this checkout into the guest, which meant a stale Mac checkout could silently
-# overwrite a newer VM launcher.)
+# Runtime installation happens inside the selected Linux environment using
+# runtime/install.sh, or automatically when creating the supplied devcontainer.
 set -e
 
 APP_NAME="AgentPRReview"
@@ -85,8 +82,8 @@ echo "  - ${APP_DIR} (URL scheme handler)"
 echo "  - agent-pr-review:// URL scheme registered"
 echo ""
 echo "Next steps:"
-echo "  1. In the VM, install the launcher that does the actual work:"
-echo "       ssh <your-dev-host> -- code/agent-pr-review/vm/install.sh"
+echo "  1. Start your devcontainer, or install runtime/install.sh on your SSH host."
+echo "     Configure transport and its destination in ~/.config/agent-pr-review/config.json."
 echo "  2. Load the Chrome extension from $EXTENSION_DIR"
 echo "     (chrome://extensions > Developer mode > Load unpacked)"
 echo "  3. Open any GitHub PR and use the review launcher in the PR header"

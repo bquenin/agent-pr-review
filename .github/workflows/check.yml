@@ -24,3 +24,19 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install bash shellcheck jq
       - run: bash tools/check.sh
+
+  devcontainer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install -g @devcontainers/cli@0.89.0
+      - name: Build and start the Linux runtime
+        run: devcontainer up --workspace-folder .
+      - name: Check installed tools
+        run: devcontainer exec --workspace-folder . -- bash -c 'agent-pr-review --help && gh --version && timeout --version'
+      - name: Run checks inside the devcontainer
+        run: devcontainer exec --workspace-folder . -- bash tools/check.sh

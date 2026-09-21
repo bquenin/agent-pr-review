@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""One-shot, read-only Chrome native messaging bridge to the configured dev host."""
+"""One-shot, read-only Chrome native messaging bridge to the configured Linux runtime."""
 import json
 from pathlib import Path
-import re
 import struct
 import subprocess
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 from review_config import load, parse_pr
+from review_transport import command, restore_host_path
 
 STATES = {"missing", "exists", "running", "archived", "error"}
 
@@ -21,13 +21,8 @@ def query(message):
     parts = parse_pr(url, config)
     if url != "https://" + "/".join((*parts[:3], "pull", parts[3])):
         raise ValueError("Expected a canonical PR URL")
-    host = config["ssh_host"]
-    if not host:
-        raise ValueError("Configure ssh_host before using the browser bridge")
-    # No URL or other web-page-controlled text goes into the remote shell command.
-    result = subprocess.run(["/usr/bin/ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
-        "-o", "ClearAllForwardings=yes", "--", host,
-        "python3 .local/share/agent-pr-review/t3-review.py --status"],
+    # Web-page-controlled text travels only as JSON on stdin for both transports.
+    result = subprocess.run(command(config, status=True),
         input=json.dumps({"prUrl": url}), text=True, capture_output=True, timeout=20, check=True)
     response = json.loads(result.stdout)
     if not isinstance(response, dict) or response.get("state") not in STATES:
@@ -52,7 +47,7 @@ def serve(source, target):
             raise ValueError("Invalid native message length")
         response = query(json.loads(read_exact(source, size)))
     except (OSError, ValueError, TypeError, subprocess.SubprocessError):
-        # Never disclose SSH diagnostics, credentials or private T3 data to a page.
+        # Never disclose transport diagnostics, credentials or private T3 data to a page.
         response = {"state": "unavailable"}
     encoded = json.dumps(response).encode()
     target.write(struct.pack("=I", len(encoded)) + encoded)
@@ -60,4 +55,5 @@ def serve(source, target):
 
 
 if __name__ == "__main__":
+    restore_host_path()
     serve(sys.stdin.buffer, sys.stdout.buffer)

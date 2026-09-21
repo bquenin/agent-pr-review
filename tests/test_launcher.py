@@ -61,7 +61,7 @@ class LauncherTests(unittest.TestCase):
         self.config.write_text(json.dumps(self.settings))
 
     def launch(self, host="github.com", *args, ok=True):
-        result = subprocess.run(["bash", str(ROOT / "vm/agent-pr-review"), "--print-cmd", "--no-tmux",
+        result = subprocess.run(["bash", str(ROOT / "runtime/agent-pr-review"), "--print-cmd", "--no-tmux",
             f"https://{host}/team/repo/pull/42", *args], env=self.env, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode == 0, ok, result.stdout + result.stderr)
         return result
@@ -134,7 +134,7 @@ class LauncherTests(unittest.TestCase):
         self.assertNotIn(session, self.launch().stdout)
 
     def test_explicit_cli_wins_over_url_query(self):
-        result = subprocess.run(["bash", str(ROOT / "vm/agent-pr-review"), "--print-cmd", "--no-tmux", "--cli", "agent",
+        result = subprocess.run(["bash", str(ROOT / "runtime/agent-pr-review"), "--print-cmd", "--no-tmux", "--cli", "agent",
             "https://github.com/team/repo/pull/42/files?cli=claude"], env=self.env, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("cli: agent", result.stdout)
@@ -150,9 +150,29 @@ class LauncherTests(unittest.TestCase):
         binary.parent.mkdir()
         binary.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\"\n")
         binary.chmod(0o755)
-        result = subprocess.run(["bash", str(ROOT / "vm/agent-pr-review"), "--no-tmux",
+        result = subprocess.run(["bash", str(ROOT / "runtime/agent-pr-review"), "--no-tmux",
             f"https://{HOSTS[1]}/team/repo/pull/42"], env=self.env, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("legacy-chat-id", result.stdout)
         self.assertEqual(json.loads(mapping.read_text())[f"{HOSTS[1]}/team/repo/pull/42"], "legacy-chat-id")
         self.assertNotIn("legacy-chat-id", self.launch().stdout)
+
+    def test_standard_tmux_attachment_and_explicit_iterm_mode(self):
+        binary = self.home / "bin/tmux"
+        binary.parent.mkdir(exist_ok=True)
+        binary.write_text("""#!/bin/sh
+case "$1" in
+    new-window) printf '@1\\n' ;;
+    attach|-CC) printf 'attach argv: %s\\n' "$*" ;;
+esac
+""")
+        binary.chmod(0o755)
+        self.env.pop("TMUX", None)
+        for control in (False, True):
+            self.settings["tmux_control_mode"] = control
+            self.save_config()
+            result = subprocess.run(["bash", str(ROOT / "runtime/agent-pr-review"),
+                "https://github.com/team/repo/pull/42"], env=self.env, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            expected = "-CC attach -t agents" if control else "attach -t agents"
+            self.assertIn("attach argv: " + expected, result.stdout)
