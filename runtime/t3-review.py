@@ -116,9 +116,10 @@ def t3_command_darwin(pid):
                    if candidate.is_absolute() and exists(candidate)), None)
     if script is None:
         raise RuntimeError("Cannot discover the T3 server entrypoint; set AGENT_PR_REVIEW_T3_BIN to its t3 wrapper")
-    if Path(binary).name not in ("node", "nodejs"):
-        os.environ["ELECTRON_RUN_AS_NODE"] = "1"
-    return [binary, str(script)]
+    if Path(binary).name in ("node", "nodejs"):
+        return [binary, str(script)]
+    # Scope the Electron switch to the CLI invocations rather than this process.
+    return ["/usr/bin/env", "ELECTRON_RUN_AS_NODE=1", binary, str(script)]
 
 
 @contextlib.contextmanager

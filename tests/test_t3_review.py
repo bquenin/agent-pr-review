@@ -138,8 +138,8 @@ class DarwinConnectionTests(unittest.TestCase):
         existing = {self.BINARY, self.BINARY.rsplit("/Contents/MacOS", 1)[0] + "/Contents/Resources/app.asar"}
         with self.ps(self.BINARY, f"{self.BINARY} {self.SCRIPT} --bootstrap-fd 3"), \
                 patch.object(Path, "is_file", lambda path: str(path) in existing):
-            self.assertEqual(t3.t3_command(self.runtime), [self.BINARY, self.SCRIPT])
-        self.assertEqual(t3.os.environ.get("ELECTRON_RUN_AS_NODE"), "1")
+            self.assertEqual(t3.t3_command(self.runtime), ["/usr/bin/env", "ELECTRON_RUN_AS_NODE=1", self.BINARY, self.SCRIPT])
+        self.assertNotIn("ELECTRON_RUN_AS_NODE", t3.os.environ)
 
     def test_source_runtime_keeps_node_and_script(self):
         with self.ps("/usr/local/bin/node", "/usr/local/bin/node /src/dist/bin.mjs serve --port 3773"), \

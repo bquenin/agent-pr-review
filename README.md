@@ -142,8 +142,10 @@ gh auth login --hostname github.com
 ```
 
 The Mac needs Bash 5+, GNU `timeout` (Homebrew `coreutils`), Python 3.10+, Git,
-GitHub CLI and `jq`, and `~/.local/bin` on the `PATH` of the terminal that later
-runs `host/install.sh`. Repository discovery uses `repo_roots` on the Mac. The T3
+GitHub CLI and `jq`. Run `host/install.sh` from a terminal whose `PATH` includes
+Homebrew's `bin`: the installer saves that `PATH` so launches from Chrome resolve
+Bash 5 and these tools instead of the system Bash 3.2. Repository discovery uses
+`repo_roots` on the Mac. The T3
 helper finds the running desktop app through `ps` and runs its bundled server
 entrypoint as the T3 CLI, so `--check` and status polling work unchanged;
 `AGENT_PR_REVIEW_T3_BIN` still overrides discovery. Reviews appear in the desktop
