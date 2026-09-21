@@ -74,7 +74,10 @@ def t3_command(runtime):
         return [override]
 
     # Use the running server's exact version, even after an upgrade on disk.
-    process = Path(f"/proc/{int(runtime['pid'])}")
+    pid = int(runtime["pid"])
+    if sys.platform == "darwin":
+        return t3_command_darwin(pid)
+    process = Path(f"/proc/{pid}")
     binary = os.readlink(process / "exe")
     if Path(binary).name not in ("node", "nodejs"):
         return [binary]
@@ -89,6 +92,32 @@ def t3_command(runtime):
         script = Path(os.readlink(process / "cwd")) / script
     if not script.is_file():
         raise RuntimeError("The running T3 entrypoint is missing; restart T3 or set AGENT_PR_REVIEW_T3_BIN")
+    return [binary, str(script)]
+
+
+def t3_command_darwin(pid):
+    # The desktop app runs Electron as Node on its server entrypoint:
+    #   <bundle>/Contents/MacOS/<name> <bundle>/.../apps/server/dist/bin.mjs --bootstrap-fd N
+    # ps joins arguments with spaces, so recover the entrypoint by stripping the
+    # executable prefix and the trailing flags rather than splitting on spaces.
+    def ps(column):
+        return subprocess.check_output(["/bin/ps", "-ww", "-o", f"{column}=", "-p", str(pid)], timeout=10).decode().strip()
+    binary, args = ps("comm"), ps("args")
+    if not binary or not Path(binary).is_file():
+        raise RuntimeError("The running T3 server process was not found; restart T3 or set AGENT_PR_REVIEW_T3_BIN")
+    def exists(path):
+        # Packaged builds load the entrypoint from inside app.asar, which Electron
+        # reads transparently but which is a single archive file on disk.
+        archive = next((parent for parent in path.parents if parent.suffix == ".asar"), None)
+        return archive.is_file() if archive else path.is_file()
+    rest = args[len(binary):].strip() if args.startswith(binary) else args
+    tokens = rest.split(" ")
+    script = next((candidate for candidate in (Path(" ".join(tokens[:count])) for count in range(1, len(tokens) + 1))
+                   if candidate.is_absolute() and exists(candidate)), None)
+    if script is None:
+        raise RuntimeError("Cannot discover the T3 server entrypoint; set AGENT_PR_REVIEW_T3_BIN to its t3 wrapper")
+    if Path(binary).name not in ("node", "nodejs"):
+        os.environ["ELECTRON_RUN_AS_NODE"] = "1"
     return [binary, str(script)]
 
 

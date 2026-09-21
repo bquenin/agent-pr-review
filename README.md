@@ -15,14 +15,18 @@ optional.
   with Bash 5+, Python 3.10+, Git, GitHub CLI, `jq`, and GNU `timeout`. The supplied
   devcontainer includes these dependencies, Node.js, tmux, and the test tools.
   Install and authenticate whichever agent backend you want inside that environment.
+  The Mac itself can host the runtime when reviewing with a local T3 Code desktop
+  app; see [Use a local T3 Code on the Mac](#use-a-local-t3-code-on-the-mac).
 - **Browser launcher:** macOS with Chrome, Python 3.10+, and Xcode command line
-  tools. Connect to a local devcontainer using the Dev Container CLI, or to any
-  Linux environment using SSH. Cursor/Claude terminal launches use iTerm2;
-  T3 launches run in the background without opening a terminal.
-- **T3:** run the server inside the same Linux environment as the review runtime.
-  It needs the authenticated orchestration HTTP API and `auth session` CLI.
-  Discovery uses Linux `/proc`; `--check` below verifies compatibility. Windows
-  and a local macOS review runtime are not currently supported.
+  tools. Connect to a local devcontainer using the Dev Container CLI, to any
+  Linux environment using SSH, or to a runtime installed on the same Mac.
+  Cursor/Claude terminal launches use iTerm2; T3 launches run in the background
+  without opening a terminal.
+- **T3:** run the server inside the same environment as the review runtime: the
+  Linux environment, or the Mac with the `local` transport. It needs the
+  authenticated orchestration HTTP API and `auth session` CLI. Discovery uses
+  Linux `/proc`, or `ps` on macOS; `--check` below verifies compatibility.
+  Windows is not currently supported.
 
 GitHub hosts and execution environments are independent: either transport can
 review GitHub.com, GHES, or GHEC. A new GHES version or T3 build should get a live
@@ -117,6 +121,36 @@ Git/GitHub CLI authentication and does not store tokens in its config. GitHub CL
 can override stored authentication, so use host-appropriate credentials when
 setting them yourself.
 
+## Use a local T3 Code on the Mac
+
+The T3 Code desktop app can host reviews directly on the Mac, with no devcontainer
+or SSH host. Install the runtime on the Mac, then select the `local` transport:
+
+```bash
+git clone https://github.com/bquenin/agent-pr-review.git
+cd agent-pr-review
+bash runtime/install.sh
+gh auth login --hostname github.com
+```
+
+```json
+{
+  "transport": "local",
+  "default_cli": "t3code",
+  "github_hosts": ["github.com"]
+}
+```
+
+The Mac needs Bash 5+, GNU `timeout` (Homebrew `coreutils`), Python 3.10+, Git,
+GitHub CLI and `jq`, and `~/.local/bin` on the `PATH` of the terminal that later
+runs `host/install.sh`. Repository discovery uses `repo_roots` on the Mac. The T3
+helper finds the running desktop app through `ps` and runs its bundled server
+entrypoint as the T3 CLI, so `--check` and status polling work unchanged;
+`AGENT_PR_REVIEW_T3_BIN` still overrides discovery. Reviews appear in the desktop
+app as threads of a project keyed on the clone root. Cursor and Claude launches
+with the `local` transport open iTerm2 on the Mac and need those CLIs installed
+locally; T3 is the validated local backend.
+
 ## GitHub Enterprise configuration
 
 For either runtime, add your hosts to `github_hosts` in the Mac and Linux
@@ -140,7 +174,7 @@ access, SSH settings, and organization instructions stay in your local environme
 
 ## Install the Mac browser bridge
 
-After configuring either transport, run on the Mac:
+After configuring a transport, run on the Mac:
 
 ```bash
 bash host/install.sh
@@ -210,7 +244,7 @@ Unknown keys and invalid types fail validation. Settings are read on each launch
 | --- | --- | --- |
 | `github_hosts` | `["github.com"]` | Hosts permitted by launchers and browser bridge |
 | `repo_roots` | `["~/code"]` | Local clone search roots |
-| `transport` | `ssh` | Browser bridge transport: `devcontainer` or `ssh`; CLI-only use ignores this |
+| `transport` | `ssh` | Browser bridge transport: `devcontainer`, `ssh`, or `local`; CLI-only use ignores this |
 | `ssh_host` | empty | SSH alias, required when using SSH transport |
 | `devcontainer_workspace` | empty | Mac path of the workspace containing your devcontainer configuration |
 | `devcontainer_command` | `devcontainer` | Dev Container CLI executable name or absolute path |
@@ -279,7 +313,9 @@ the prompt asks for cleanup only when local work can be preserved.
 
 ### T3
 
-T3 must be running inside the same Linux environment as the runtime. Check connectivity without launching a review:
+T3 must be running inside the same environment as the runtime: the Linux
+environment, or the Mac when using the `local` transport. Check connectivity
+without launching a review:
 
 ```bash
 python3 ~/.local/share/agent-pr-review/t3-review.py --check
@@ -355,7 +391,7 @@ tools/         extension build and local checks
 
 Launch diagnostics appear in the terminal. Mac bridge logs are at
 `~/Library/Application Support/AgentPRReview/agent-pr-review.log`. Check the
-selected transport (`devcontainer exec` or SSH),
+selected transport (`devcontainer exec`, SSH, or local),
 `gh auth status --hostname <host>`, backend authentication and `--print-cmd`
 output before changing permissions.
 
@@ -366,7 +402,8 @@ marked T3 monitor line from `crontab -e` if supervision was enabled. Then remove
   `~/Library/Application Support/AgentPRReview`,
   `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.agent_pr_review.status.json`,
   and the unpacked extension from Chrome.
-- Linux environment: `~/.local/bin/agent-pr-review` and `~/.local/share/agent-pr-review`.
+- Linux environment, or the Mac with the `local` transport: `~/.local/bin/agent-pr-review`
+  and `~/.local/share/agent-pr-review`.
 
 Configuration is under `~/.config/agent-pr-review` in each environment. Preserve it
 and any review worktrees/transcripts you still need. The launcher adds

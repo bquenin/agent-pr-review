@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Install runtime files from this checkout into the current Linux environment.
+# Install runtime files from this checkout into the current environment (Linux,
+# or a Mac hosting a local T3 Code desktop app).
 # Installed files are copies; rerun after source updates. The Mac installer is
 # separate so neither environment overwrites the other's installed runtime.
 set -euo pipefail
