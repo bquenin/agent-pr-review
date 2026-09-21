@@ -353,7 +353,7 @@ ensure_global_state_ignored() {
     local configured exclude_path parent line missing=""
     configured="$(trim_ws "$(git config --global --get core.excludesfile 2>/dev/null)")"
     if [ -z "$configured" ]; then
-        exclude_path="$HOME/.config/git/ignore"
+        exclude_path="${XDG_CONFIG_HOME:-$HOME/.config}/git/ignore"
     else
         exclude_path="$configured"
         # Deviation from the Swift (which never expands "~"): a literal "~/..."

@@ -50,7 +50,9 @@ class FakeClient:
 
 class ConnectionTests(unittest.TestCase):
     def setUp(self):
-        self.enterContext(patch.dict(t3.os.environ, {}, clear=True))
+        environment = patch.dict(t3.os.environ, {}, clear=True)
+        environment.start()
+        self.addCleanup(environment.stop)
         self.runtime = {"pid": 123, "origin": "http://127.0.0.1:3774"}
 
     def test_native_runtime_uses_running_binary(self):

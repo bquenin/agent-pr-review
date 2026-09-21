@@ -20,6 +20,7 @@ class LauncherTests(unittest.TestCase):
         self.home = Path(self.tmp.name).resolve()
         self.env = dict(os.environ, HOME=str(self.home), GIT_CONFIG_NOSYSTEM="1",
             GIT_CONFIG_GLOBAL=str(self.home / ".gitconfig"),
+            XDG_CONFIG_HOME=str(self.home / "custom-xdg"),
             AGENT_PR_REVIEW_RESOURCES=str(self.home / "resources"))
         for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_CONFIG_COUNT"):
             self.env.pop(key, None)
@@ -76,6 +77,7 @@ class LauncherTests(unittest.TestCase):
             ids.add(re.search(r"Starting Claude session: (.+)", result.stdout)[1])
             self.assertIn(f"gh api --hostname {host}", result.stdout)
             self.assertEqual(self.git("-C", str(self.repos[host]), "branch", "--show-current"), "main")
+            self.assertEqual(self.git("-C", str(self.repos[host]), "status", "--porcelain"), "")
             self.assertIn("Do not post comments", result.stdout)
             self.assertNotIn("--approve", result.stdout)
             self.assertFalse((self.home / ".claude.json").exists())
