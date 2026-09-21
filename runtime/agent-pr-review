@@ -2,26 +2,13 @@
 #
 # agent-pr-review - the review launcher, in bash.
 #
-# This is where all the launcher logic lives. The Mac-side shim
-# (host/ClaudeReviewHandler.swift) only parses the agent-pr-review:// URL,
-# opens an iTerm tab, and runs
-# `ssh -t <dev-host> -- .local/bin/agent-pr-review <pr-url> [--cli claude|agent|t3code]`.
-# Everything after that happens here, in the Linux VM: repo discovery under
-# ~/code, preferred-remote selection, PR worktree preparation, session identity,
-# resume detection and prompt assembly - then launch claude or the Cursor agent
-# CLI in the prepared workspace.
+# Runs inside a Linux environment: devcontainer, VM, remote host, or workstation.
+# The optional Mac browser bridge dispatches here using SSH or devcontainer exec.
+# Repository discovery, PR worktrees, session identity, prompts and agent launches
+# all belong to this runtime. Reinstall with runtime/install.sh after editing.
 #
-# By default the review does not run in the ssh tab itself: after preparation the
-# launcher hands the command to a new window of the host's persistent tmux session
-# (default "agents", the one iTerm attaches to in control mode). The review then
-# survives the ssh connection dying - closing the tab, quitting iTerm, or losing the
-# network - and comes back as a tab when iTerm reattaches. When a control-mode
-# client is already attached, the new window shows up as a tab on its own and the
-# launcher just exits; otherwise the launcher turns this terminal into the gateway
-# with `tmux -CC attach`.
-#
-# Behavior changes belong in this file, not in the Swift shim. Re-run
-# vm/install.sh after editing - the installed copy is not a symlink.
+# With tmux installed, reviews survive terminal disconnects. Standard terminal
+# attachment is the default; tmux_control_mode enables iTerm integration explicitly.
 #
 # Usage: agent-pr-review [--print-cmd] [--cli claude|agent|t3code]
 #                        [--no-tmux] [--tmux-session NAME] [--repo PATH] <pr-url>
@@ -65,6 +52,7 @@ T3_REVIEW_EFFORT=""
 TRUST_WORKTREES=false
 POSTING_POLICY=review-only
 MONITOR_ENABLED=false
+TMUX_CONTROL_MODE=false
 LEGACY_HOST=""
 WORKTREE_ID=""
 
@@ -82,8 +70,7 @@ WORKTREE_FETCH_TIMEOUT_SECONDS=45
 UUID_URL_NAMESPACE="6ba7b811-9dad-11d1-80b4-00c04fd430c8"
 DEFAULT_REVIEW_CLI="agent"
 
-# Persistent tmux session the review windows are created in. iTerm attaches to it
-# in control mode, so each review is a tab that survives the ssh session.
+# Persistent tmux session for review windows across terminal disconnects.
 DEFAULT_TMUX_SESSION="agents"
 TMUX_WINDOW_NAME_MAX=40
 
@@ -760,14 +747,23 @@ tmux_find_window() {
 # True when an iTerm-style control-mode client is attached to the session, i.e.
 # tmux windows are already showing up as tabs somewhere.
 tmux_has_control_client() {
+    [ "$TMUX_CONTROL_MODE" = true ] || return 1
     tmux list-clients -t "$1" -F '#{client_flags}' 2>/dev/null | grep -q 'control-mode'
+}
+
+tmux_attach() {
+    if [ "$TMUX_CONTROL_MODE" = true ]; then
+        exec tmux -CC attach -t "$1"
+    else
+        exec tmux attach -t "$1"
+    fi
 }
 
 # Run the prepared launch command in a window of the tmux session instead of in
 # this terminal. Exits the script on success (either the window is already a tab
-# for an attached control-mode client, or we exec into `tmux -CC attach` so it
-# becomes one); returns non-zero if tmux could not be used, so the caller can
-# fall back to running the command here.
+# for an attached control-mode client, or we attach using the configured terminal
+# mode); returns non-zero if tmux could not be used, so the caller can fall back
+# to running the command here.
 run_in_tmux() {
     local session="$1" window="$2" workdir="$3" mode_message="$4" cursor_dir="$5"
     shift 5
@@ -792,7 +788,7 @@ run_in_tmux() {
             exit 0
         fi
         printf 'Review already running in tmux window %s (session %s); attaching...\n' "$window" "$session"
-        exec tmux -CC attach -t "$session"
+        tmux_attach "$session"
     fi
 
     # A failed launch must stay readable instead of the window vanishing with it.
@@ -831,7 +827,7 @@ run_in_tmux() {
     fi
 
     printf 'Review running in tmux window %s (session %s); attaching...\n' "$window" "$session"
-    exec tmux -CC attach -t "$session"
+    tmux_attach "$session"
 }
 
 # ---------------------------------------------------------------------------
@@ -849,6 +845,7 @@ main() {
     TRUST_WORKTREES="$(config_get trust_worktrees)"
     POSTING_POLICY="$(config_get posting_policy)"
     MONITOR_ENABLED="$(config_get monitor)"
+    TMUX_CONTROL_MODE="$(config_get tmux_control_mode)"
     LEGACY_HOST="$(config_get legacy_host)"
     local extra_ca
     extra_ca="$(config_get node_extra_ca_certs)"
@@ -1022,8 +1019,8 @@ $prompt"
         [ -n "$wt_path" ] || { log "ERROR: T3 review requires a dedicated worktree"; exit 1; }
         local t3_helper="$RESOURCE_DIR/t3-review.py"
         local t3_monitor="$RESOURCE_DIR/t3_monitor.py"
-        [ -f "$t3_helper" ] || { log "ERROR: reinstall vm/install.sh to add the T3 launcher"; exit 1; }
-        [ -f "$t3_monitor" ] || { log "ERROR: reinstall vm/install.sh to add the T3 monitor"; exit 1; }
+        [ -f "$t3_helper" ] || { log "ERROR: reinstall runtime/install.sh to add the T3 launcher"; exit 1; }
+        [ -f "$t3_monitor" ] || { log "ERROR: reinstall runtime/install.sh to add the T3 monitor"; exit 1; }
         # Send structured data to the helper over stdin; never evaluate the prompt.
         local -a t3_args=()
         [ "$print_cmd" -eq 0 ] || t3_args+=(--print-cmd)
@@ -1128,7 +1125,7 @@ PYT3
     fi
 
     if [ "$tmux_active" -eq 1 ]; then
-        # Exits (or execs into `tmux -CC attach`) when the window is created.
+        # Exits or attaches to the session when the window is created.
         run_in_tmux "$tmux_session" "$tmux_window" "$launch_path" "$mode_message" \
             "$cursor_config_dir" "${launch_cmd[@]}" ||
             log "WARNING: tmux delegation failed; running the review in this terminal"

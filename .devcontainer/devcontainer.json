@@ -1,0 +1,14 @@
+{
+  "name": "Agent PR Review",
+  "build": { "dockerfile": "Dockerfile" },
+  "features": {
+    "ghcr.io/devcontainers/features/node:2": { "version": "22", "pnpmVersion": "none" },
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "remoteUser": "vscode",
+  "mounts": [
+    "source=agent-pr-review-home-${devcontainerId},target=/home/vscode,type=volume"
+  ],
+  "postCreateCommand": "mkdir -p \"$HOME/code\" && bash runtime/install.sh",
+  "postStartCommand": "python3 \"$HOME/.local/share/agent-pr-review/t3_monitor.py\" --ensure"
+}

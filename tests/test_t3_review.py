@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import Mock, patch
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-spec = importlib.util.spec_from_file_location("t3_review", Path(__file__).parents[1] / "vm/t3-review.py")
+spec = importlib.util.spec_from_file_location("t3_review", Path(__file__).parents[1] / "runtime/t3-review.py")
 t3 = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(t3)
 

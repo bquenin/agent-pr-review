@@ -35,7 +35,7 @@ else:
                 calls = directory / "calls.jsonl"
                 calls.write_text("")
                 env = dict(os.environ, PATH=str(directory) + os.pathsep + os.environ["PATH"], MONITOR_CALLS=str(calls))
-                result = subprocess.run(["bash", str(ROOT / "vm/pr-monitor.sh"), "--host", host,
+                result = subprocess.run(["bash", str(ROOT / "runtime/pr-monitor.sh"), "--host", host,
                     "--repo", "team/repo", "--pr", "42", "--since", "2026-01-31T00:00:00Z", "--once"],
                     env=env, text=True, capture_output=True, timeout=10)
                 self.assertEqual(result.returncode, 0, result.stderr)

@@ -36,7 +36,9 @@ class ConfigTests(unittest.TestCase):
         for invalid in ([], {"github_hosts": []}, {"github_hosts": ["*.ghe.com"]},
                 {"github_hosts": ["https://github.com"]}, {"github_hosts": ["evil.example:443"]},
                 {"monitor": "true"}, {"monitor": True}, {"ssh_host": "-oProxyCommand=bad"},
-                {"typo": True}, {"legacy_host": "unknown.example"}, {"repo_roots": ["relative"]},
+                {"transport": "cloud-workspace"}, {"devcontainer_workspace": "relative"},
+                {"devcontainer_command": "-x"}, {"devcontainer_command": "relative/bin/cli"},
+                {"tmux_control_mode": "true"}, {"typo": True}, {"legacy_host": "unknown.example"}, {"repo_roots": ["relative"]},
                 {"host_instructions": {"unknown.example": "text"}}):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 self.configure(invalid)

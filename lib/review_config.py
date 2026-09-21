@@ -12,7 +12,11 @@ from urllib.parse import parse_qs, urlsplit
 DEFAULTS = {
     "github_hosts": ["github.com"],
     "repo_roots": ["~/code"],
+    "transport": "ssh",
     "ssh_host": "",
+    "devcontainer_workspace": "",
+    "devcontainer_command": "devcontainer",
+    "tmux_control_mode": False,
     "default_cli": "agent",
     "claude_model": "", "claude_effort": "",
     "cursor_model": "", "t3_model": "", "t3_effort": "",
@@ -61,6 +65,14 @@ def load(config_file=None):
             config["ssh_host"] = next((line.strip() for line in legacy.read_text().splitlines() if line.strip()), "")
     if config["ssh_host"] and not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9._-]*", config["ssh_host"]):
         raise ValueError("ssh_host must be an SSH alias or hostname")
+    if config["transport"] not in ("ssh", "devcontainer"):
+        raise ValueError("transport must be ssh or devcontainer")
+    workspace = config["devcontainer_workspace"]
+    if workspace and not Path(workspace).expanduser().is_absolute():
+        raise ValueError("devcontainer_workspace must be an absolute path or start with ~/")
+    command = config["devcontainer_command"]
+    if not command or command.startswith("-") or ("/" in command and not Path(command).expanduser().is_absolute()):
+        raise ValueError("devcontainer_command must be an executable name or absolute path")
     if config["default_cli"] not in ("agent", "claude", "t3code"):
         raise ValueError("default_cli must be agent, claude or t3code")
     if config["posting_policy"] not in ("review-only", "comment", "approve"):

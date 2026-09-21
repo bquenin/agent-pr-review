@@ -1,5 +1,6 @@
 {
   "github_hosts": ["github.com", "github.example.com", "octocorp.ghe.com"],
+  "transport": "ssh",
   "ssh_host": "dev-host",
   "repo_roots": ["~/code"],
   "default_cli": "agent",

@@ -3,6 +3,7 @@ import io
 import json
 from pathlib import Path
 import struct
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -80,7 +81,9 @@ class NativeTests(unittest.TestCase):
                     '{"state":"exists","private":"ignored"}')) as run:
                 self.assertEqual(native.query(REQUEST), {"state": "exists"})
             command = run.call_args.args[0]
-            self.assertEqual(command[-2:], ["dev-host", "python3 .local/share/agent-pr-review/t3-review.py --status"])
+            self.assertEqual(command[-2], "dev-host")
+            self.assertEqual(shlex.split(command[-1]), ["/bin/sh", "-c",
+                'exec python3 "$HOME/.local/share/agent-pr-review/t3-review.py" --status', "agent-pr-review"])
             self.assertNotIn(REQUEST["prUrl"], command)
             self.assertEqual(json.loads(run.call_args.kwargs["input"]), {"prUrl": REQUEST["prUrl"]})
             self.assertEqual(run.call_args.kwargs["timeout"], 20)
@@ -100,3 +103,17 @@ class NativeTests(unittest.TestCase):
             out = io.BytesIO()
             native.serve(io.BytesIO(struct.pack("=I", len(data)) + data), out)
         self.assertEqual(json.loads(out.getvalue()[4:]), {"state": "unavailable"})
+
+    def test_devcontainer_status_is_read_only_and_filters_private_fields(self):
+        config = self.home / ".config/agent-pr-review/config.json"
+        config.write_text(json.dumps({"transport": "devcontainer", "devcontainer_workspace": str(self.home),
+                                     "github_hosts": ["github.example.com"]}))
+        with patch("review_transport.shutil.which", return_value="/tools/devcontainer"), \
+                patch.object(native.subprocess, "run", return_value=subprocess.CompletedProcess([], 0,
+                    '{"state":"running","private":"ignored"}')) as run:
+            self.assertEqual(native.query(REQUEST), {"state": "running"})
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[:5], ["/tools/devcontainer", "exec", "--workspace-folder", str(self.home), "--"])
+        self.assertNotIn("up", argv)
+        self.assertNotIn(REQUEST["prUrl"], argv)
+        self.assertEqual(json.loads(run.call_args.kwargs["input"]), {"prUrl": REQUEST["prUrl"]})
