@@ -53,6 +53,9 @@ class ConnectionTests(unittest.TestCase):
         environment = patch.dict(t3.os.environ, {}, clear=True)
         environment.start()
         self.addCleanup(environment.stop)
+        platform = patch.object(t3.sys, "platform", "linux")
+        platform.start()
+        self.addCleanup(platform.stop)
         self.runtime = {"pid": 123, "origin": "http://127.0.0.1:3774"}
 
     def test_native_runtime_uses_running_binary(self):
@@ -108,6 +111,64 @@ class ConnectionTests(unittest.TestCase):
                 patch.object(Path, "is_file", return_value=False):
             with self.assertRaisesRegex(RuntimeError, "entrypoint is missing"):
                 t3.t3_command(self.runtime)
+
+
+class DarwinConnectionTests(unittest.TestCase):
+    """macOS has no /proc; the desktop app runs Electron as Node on an app.asar entrypoint."""
+    BINARY = "/Applications/T3 Code (Alpha).app/Contents/MacOS/T3 Code (Alpha)"
+    SCRIPT = "/Applications/T3 Code (Alpha).app/Contents/Resources/app.asar/apps/server/dist/bin.mjs"
+
+    def setUp(self):
+        environment = patch.dict(t3.os.environ, {}, clear=True)
+        environment.start()
+        self.addCleanup(environment.stop)
+        platform = patch.object(t3.sys, "platform", "darwin")
+        platform.start()
+        self.addCleanup(platform.stop)
+        self.runtime = {"pid": 123, "origin": "http://127.0.0.1:3773"}
+
+    def ps(self, comm, args, listeners="p123\nf21\n"):
+        def fake(argv, timeout):
+            if argv[0] == "/usr/sbin/lsof":
+                self.assertEqual(argv[1:], ["-nP", "-iTCP:3773", "-sTCP:LISTEN", "-Fp"])
+                return listeners.encode()
+            self.assertEqual(argv[:3], ["/bin/ps", "-ww", "-o"])
+            self.assertEqual(argv[4:], ["-p", "123"])
+            return (comm if argv[3] == "comm=" else args).encode() + b"\n"
+        return patch.object(t3.subprocess, "check_output", side_effect=fake)
+
+    def test_reused_pid_not_serving_the_origin_is_rejected_before_ps(self):
+        for listeners in ("", "p999\nf12\n", "p1234\n"):
+            with self.subTest(listeners=listeners), self.ps(self.BINARY, f"{self.BINARY} {self.SCRIPT}", listeners) as calls:
+                with self.assertRaisesRegex(RuntimeError, "not serving http://127.0.0.1:3773"):
+                    t3.t3_command(self.runtime)
+            self.assertEqual([call.args[0][0] for call in calls.call_args_list], ["/usr/sbin/lsof"])
+
+    def test_packaged_app_runs_electron_as_node_on_asar_entrypoint(self):
+        existing = {self.BINARY, self.BINARY.rsplit("/Contents/MacOS", 1)[0] + "/Contents/Resources/app.asar"}
+        with self.ps(self.BINARY, f"{self.BINARY} {self.SCRIPT} --bootstrap-fd 3"), \
+                patch.object(Path, "is_file", lambda path: str(path) in existing):
+            self.assertEqual(t3.t3_command(self.runtime), ["/usr/bin/env", "ELECTRON_RUN_AS_NODE=1", self.BINARY, self.SCRIPT])
+        self.assertNotIn("ELECTRON_RUN_AS_NODE", t3.os.environ)
+
+    def test_source_runtime_keeps_node_and_script(self):
+        with self.ps("/usr/local/bin/node", "/usr/local/bin/node /src/dist/bin.mjs serve --port 3773"), \
+                patch.object(Path, "is_file", return_value=True):
+            self.assertEqual(t3.t3_command(self.runtime), ["/usr/local/bin/node", "/src/dist/bin.mjs"])
+        self.assertNotIn("ELECTRON_RUN_AS_NODE", t3.os.environ)
+
+    def test_missing_process_or_entrypoint_offers_explicit_override(self):
+        for comm, args in (("", ""), (self.BINARY, f"{self.BINARY} /missing/bin.mjs --bootstrap-fd 3")):
+            with self.subTest(args=args), self.ps(comm, args), \
+                    patch.object(Path, "is_file", lambda path: str(path) == self.BINARY):
+                with self.assertRaisesRegex(RuntimeError, "AGENT_PR_REVIEW_T3_BIN"):
+                    t3.t3_command(self.runtime)
+
+    def test_explicit_wrapper_override_does_not_run_ps(self):
+        with patch.dict(t3.os.environ, {"AGENT_PR_REVIEW_T3_BIN": "/custom path/t3"}), \
+                patch.object(t3.subprocess, "check_output") as ps:
+            self.assertEqual(t3.t3_command(self.runtime), ["/custom path/t3"])
+        ps.assert_not_called()
 
 
 class LaunchTests(unittest.TestCase):

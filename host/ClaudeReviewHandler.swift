@@ -1,7 +1,7 @@
 import Cocoa
 
 // macOS URL shim. Shared Python code validates configuration and dispatches to
-// the Linux runtime via SSH or devcontainer exec. This app only owns Mac UI.
+// the runtime via SSH, devcontainer exec, or locally. This app only owns Mac UI.
 
 let HOME_DIR = FileManager.default.homeDirectoryForCurrentUser.path
 let PRIMARY_URL_SCHEME = "agent-pr-review"

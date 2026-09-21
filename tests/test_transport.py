@@ -30,7 +30,7 @@ class TransportTests(unittest.TestCase):
         binary.parent.mkdir(parents=True)
         binary.write_text(f"#!{sys.executable}\nimport json,sys; print(json.dumps(sys.argv[1:]))\n")
         binary.chmod(0o755)
-        for method in ("ssh", "devcontainer"):
+        for method in ("ssh", "devcontainer", "local"):
             self.config["transport"] = method
             for host in HOSTS:
                 for cli in ("agent", "claude", "t3code"):
@@ -42,6 +42,9 @@ class TransportTests(unittest.TestCase):
                             self.assertIn("-T" if cli == "t3code" else "-t", argv)
                             self.assertEqual(argv[-2], "dev-host")
                             runtime = shlex.split(argv[-1])
+                        elif method == "local":
+                            self.assertEqual(argv[0], "/bin/sh")
+                            runtime = argv
                         else:
                             self.assertEqual(argv[:5], ["/tools/devcontainer", "exec", "--workspace-folder", str(self.home), "--"])
                             runtime = argv[5:]
@@ -54,11 +57,11 @@ class TransportTests(unittest.TestCase):
         script = self.home / ".local/share/agent-pr-review/t3-review.py"
         script.parent.mkdir(parents=True)
         script.write_text('import json,sys; print(json.dumps({"argv":sys.argv[1:], "payload":json.load(sys.stdin)}))\n')
-        for method in ("ssh", "devcontainer"):
+        for method in ("ssh", "devcontainer", "local"):
             self.config["transport"] = method
             with patch.object(transport.shutil, "which", return_value="/tools/devcontainer"):
                 argv = transport.command(self.config, status=True)
-            runtime = shlex.split(argv[-1]) if method == "ssh" else argv[5:]
+            runtime = shlex.split(argv[-1]) if method == "ssh" else argv if method == "local" else argv[5:]
             result = subprocess.run(runtime, input='{"prUrl":"https://github.com/team/repo/pull/42"}',
                                     env=dict(os.environ, HOME=str(self.home)), capture_output=True, text=True, check=True)
             self.assertEqual(json.loads(result.stdout), {"argv": ["--status"],

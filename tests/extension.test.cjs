@@ -135,6 +135,31 @@ test('polls coalesce while pending and do not run for hidden tabs or other tools
   assert.equal(run.requests.length, 1);
 });
 
+test('launcher mounts in the React pull request header and unhides its actions slot', () => {
+  const run = load('/team/repo/pull/42');
+  const classes = new Set(['d-none']);
+  const prepended = [];
+  const actions = { classList: { remove(name) { classes.delete(name); } }, prepend(node) { prepended.push(node); } };
+  const seen = [];
+  run.context.document.querySelector = (sel) => {
+    seen.push(sel);
+    return sel === '[data-component="PageHeader"] [data-component="PH_Actions"]' ? actions : null;
+  };
+  const element = () => {
+    const children = [];
+    const matches = (sel) => children.flatMap((child) => (child.className.split(' ').includes(sel.slice(1)) ? [child] : child.querySelectorAll(sel)));
+    return { className: '', innerHTML: '', dataset: {}, classList: { add() {}, toggle() {}, remove() {} }, setAttribute() {}, addEventListener() {},
+      append(...nodes) { children.push(...nodes); }, appendChild(node) { children.push(node); },
+      querySelector(sel) { return matches(sel)[0] ?? null; }, querySelectorAll: matches };
+  };
+  run.context.document.createElement = element;
+  run('injectLauncher()');
+  assert.equal(seen[0], '.review-launcher');
+  assert.equal(seen[1], '[data-component="PageHeader"] [data-component="PH_Actions"]');
+  assert.equal(prepended.length, 1);
+  assert.equal(classes.has('d-none'), false);
+});
+
 test('1.5.0 declares the background native messaging bridge', () => {
   const manifest = JSON.parse(fs.readFileSync(`${__dirname}/../extension/manifest.json`));
   assert.equal(manifest.version, '1.5.0');

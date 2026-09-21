@@ -2,8 +2,9 @@
 #
 # agent-pr-review - the review launcher, in bash.
 #
-# Runs inside a Linux environment: devcontainer, VM, remote host, or workstation.
-# The optional Mac browser bridge dispatches here using SSH or devcontainer exec.
+# Runs inside a Linux environment: devcontainer, VM, remote host, or workstation,
+# or on a Mac hosting a local T3 Code desktop app. The optional Mac browser bridge
+# dispatches here using SSH, devcontainer exec, or a direct local launch.
 # Repository discovery, PR worktrees, session identity, prompts and agent launches
 # all belong to this runtime. Reinstall with runtime/install.sh after editing.
 #
@@ -24,7 +25,7 @@
 # --print-cmd, and when $TMUX is already set (the launcher is itself running
 # inside tmux - including the review window it creates).
 #
-# Requires: bash 5, GNU coreutils, git, python3, find. Linux only.
+# Requires: bash 5, GNU coreutils, git, python3, find. Linux, or macOS with Homebrew coreutils.
 
 set -u
 
@@ -283,13 +284,16 @@ claude_project_dir_name() {
 }
 
 # Run a git (or any) command with a wall-clock timeout. `timeout` is part of
-# coreutils and always present here; the fallback only keeps a stripped-down
-# container from hanging forever on a network git operation.
+# coreutils and always present on Linux; Homebrew coreutils on macOS may only
+# expose it as `gtimeout`. The fallback keeps a stripped-down container from
+# hanging forever on a network git operation.
 run_with_timeout() {
     local secs="$1"
     shift
     if command -v timeout >/dev/null 2>&1; then
         timeout "$secs" "$@"
+    elif command -v gtimeout >/dev/null 2>&1; then
+        gtimeout "$secs" "$@"
     else
         log "WARNING: coreutils timeout not found; running without a ${secs}s limit"
         "$@"

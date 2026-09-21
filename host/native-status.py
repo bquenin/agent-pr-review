@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-shot, read-only Chrome native messaging bridge to the configured Linux runtime."""
+"""One-shot, read-only Chrome native messaging bridge to the configured runtime."""
 import json
 from pathlib import Path
 import struct

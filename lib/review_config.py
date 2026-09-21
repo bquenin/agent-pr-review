@@ -65,8 +65,8 @@ def load(config_file=None):
             config["ssh_host"] = next((line.strip() for line in legacy.read_text().splitlines() if line.strip()), "")
     if config["ssh_host"] and not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9._-]*", config["ssh_host"]):
         raise ValueError("ssh_host must be an SSH alias or hostname")
-    if config["transport"] not in ("ssh", "devcontainer"):
-        raise ValueError("transport must be ssh or devcontainer")
+    if config["transport"] not in ("ssh", "devcontainer", "local"):
+        raise ValueError("transport must be ssh, devcontainer or local")
     workspace = config["devcontainer_workspace"]
     if workspace and not Path(workspace).expanduser().is_absolute():
         raise ValueError("devcontainer_workspace must be an absolute path or start with ~/")

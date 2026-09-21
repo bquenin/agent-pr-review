@@ -1,4 +1,4 @@
-"""Host-side dispatch to a Linux runtime over SSH or the Dev Container CLI."""
+"""Host-side dispatch to a runtime over SSH, the Dev Container CLI, or directly on this Mac."""
 import json
 import os
 from pathlib import Path
@@ -40,6 +40,9 @@ def command(config, *, url=None, cli=None, status=False):
         script = 'exec "$HOME/.local/bin/agent-pr-review" "$@"'
         arguments = [url, "--cli", cli]
     runtime = ["/bin/sh", "-c", script, "agent-pr-review", *arguments]
+    if config["transport"] == "local":
+        # The runtime is installed on this machine; no remote shell is involved.
+        return runtime
     if config["transport"] == "devcontainer":
         workspace = Path(config["devcontainer_workspace"]).expanduser()
         if not config["devcontainer_workspace"] or not workspace.is_dir():

@@ -15,8 +15,8 @@ check also typechecks the URL handler with the Xcode command line tools.
 
 The Linux launcher owns repository selection, worktree preparation and agent
 launches. Shared configuration is in `lib/review_config.py`. The Mac handler owns
-the Mac UI; shared Python code validates URLs and dispatches through SSH or
-the Dev Container CLI. Keep GitHub.com, GHES, and GHEC behavior
+the Mac UI; shared Python code validates URLs and dispatches through SSH, the
+Dev Container CLI, or a runtime installed on the same Mac. Keep GitHub.com, GHES, and GHEC behavior
 covered when changing any boundary. Host permissions must remain explicit.
 
 New backends must honor the configured review policy, preserve worktree

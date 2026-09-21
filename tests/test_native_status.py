@@ -49,6 +49,9 @@ class NativeTests(unittest.TestCase):
                 installer.main()
             manifest = json.loads((root / "Library/Application Support/Google/Chrome/NativeMessagingHosts/com.agent_pr_review.status.json").read_text())
             self.assertEqual(manifest["allowed_origins"], [f"chrome-extension://{installer.extension_id(extension)}/"])
+            for browser in ("BraveSoftware/Brave-Browser", "Chromium", "Microsoft Edge", "Vivaldi"):
+                other = root / "Library/Application Support" / browser / "NativeMessagingHosts/com.agent_pr_review.status.json"
+                self.assertEqual(json.loads(other.read_text()), manifest, browser)
             installed = Path(manifest["path"])
             self.assertTrue(installed.is_absolute())
             self.assertEqual(installed.read_text().splitlines()[0], "#!" + installer.sys.executable)
