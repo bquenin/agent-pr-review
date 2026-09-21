@@ -1,0 +1,131 @@
+.review-launcher {
+  position: relative;
+  display: inline-flex;
+  margin-left: 8px;
+  vertical-align: middle;
+  --review-launcher-fg: #fff;
+  --review-launcher-bg: #d97706;
+  --review-launcher-bg-hover: #b45309;
+  --review-launcher-bg-active: #92400e;
+  --review-launcher-border: rgba(0, 0, 0, 0.15);
+  --review-launcher-divider: rgba(255, 255, 255, 0.2);
+}
+
+html[data-color-mode="dark"] .review-launcher {
+  --review-launcher-bg: #c2410c;
+  --review-launcher-bg-hover: #9a3412;
+  --review-launcher-bg-active: #7c2d12;
+  --review-launcher-border: rgba(240, 246, 252, 0.12);
+  --review-launcher-divider: rgba(255, 255, 255, 0.14);
+}
+
+html .review-launcher.has-t3-review {
+  --review-launcher-bg: #1a7f37;
+  --review-launcher-bg-hover: #116329;
+  --review-launcher-bg-active: #0d4a20;
+}
+
+html .review-launcher.t3-status-unavailable {
+  --review-launcher-bg: #57606a;
+  --review-launcher-bg-hover: #424a53;
+  --review-launcher-bg-active: #32383f;
+}
+
+.review-launcher-primary,
+.review-launcher-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 20px;
+  color: var(--review-launcher-fg);
+  background-color: var(--review-launcher-bg);
+  border: 1px solid var(--review-launcher-border);
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+}
+
+.review-launcher-primary {
+  padding: 5px 12px;
+  white-space: nowrap;
+  border-radius: 6px 0 0 6px;
+  border-right: 0;
+}
+
+.review-launcher-toggle {
+  padding: 5px 8px;
+  border-radius: 0 6px 6px 0;
+  border-left: 1px solid var(--review-launcher-divider);
+}
+
+.review-launcher-primary:hover,
+.review-launcher-toggle:hover,
+.review-launcher.is-open .review-launcher-toggle {
+  background-color: var(--review-launcher-bg-hover);
+}
+
+.review-launcher-primary:active,
+.review-launcher-toggle:active {
+  background-color: var(--review-launcher-bg-active);
+}
+
+.review-launcher-primary:focus-visible,
+.review-launcher-toggle:focus-visible,
+.review-launcher-option:focus-visible {
+  outline: 2px solid var(--focus-outlineColor, #0969da);
+  outline-offset: 2px;
+}
+
+.review-launcher svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+  flex-shrink: 0;
+}
+
+.review-launcher-toggle svg {
+  width: 12px;
+  height: 12px;
+}
+
+.review-launcher-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 1000;
+  display: none;
+  min-width: 180px;
+  padding: 4px 0;
+  background-color: var(--overlay-bgColor, var(--bgColor-default, #fff));
+  border: 1px solid var(--borderColor-default, rgba(27, 31, 36, 0.15));
+  border-radius: 6px;
+  box-shadow: var(--shadow-floating-large, 0 8px 24px rgba(140, 149, 159, 0.2));
+}
+
+.review-launcher.is-open .review-launcher-menu {
+  display: block;
+}
+
+.review-launcher-option {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  color: var(--fgColor-default, #24292f);
+  background: none;
+  border: 0;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.review-launcher-option:hover {
+  background-color: var(--control-transparent-bgColor-hover, var(--bgColor-muted, #f6f8fa));
+}
+
+.review-launcher-option.is-selected {
+  font-weight: 600;
+  background-color: var(--control-transparent-bgColor-selected, var(--bgColor-accent-muted, #ddf4ff));
+}

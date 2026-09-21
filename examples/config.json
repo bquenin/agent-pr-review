@@ -1,0 +1,9 @@
+{
+  "github_hosts": ["github.com", "github.example.com", "octocorp.ghe.com"],
+  "ssh_host": "dev-host",
+  "repo_roots": ["~/code"],
+  "default_cli": "agent",
+  "posting_policy": "review-only",
+  "monitor": false,
+  "trust_worktrees": false
+}
