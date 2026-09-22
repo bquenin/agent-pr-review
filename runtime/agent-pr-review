@@ -35,6 +35,7 @@ set -u
 
 RESOURCE_DIR="${AGENT_PR_REVIEW_RESOURCES:-$HOME/.local/share/agent-pr-review}"
 MONITOR_SCRIPT_PATH="$RESOURCE_DIR/pr-monitor.sh"
+T3_MONITOR_SCRIPT_PATH="$RESOURCE_DIR/t3_monitor.py"
 REVIEW_METHODOLOGY_PATH="$RESOURCE_DIR/review-methodology.md"
 REVIEW_POSTING_RULES_PATH="$RESOURCE_DIR/review-posting-rules.md"
 
@@ -677,6 +678,7 @@ EOF
 4. When the monitor reports new commits or new feedback: update this worktree (git fetch $remote_name "+refs/pull/$pr_number/head:$remote_ref" then git merge --ff-only $remote_ref), re-review what changed since your last posted review with the same rigor as the initial review (a fix can introduce the same class of gap it closes), address the new feedback, and go back to step 2.
 
 5. When the monitor reports the PR is merged or closed: clean up this PR's local state, then stop.
+$(if [ "$review_cli" = "t3code" ]; then printf '   - Before removing the worktree, disable its watcher so it cannot race the cleanup: python3 %s --stop-worktree %s\n' "$(shell_quote "$T3_MONITOR_SCRIPT_PATH")" "$(shell_quote "$wt_path")"; fi)
    - First cd $(shell_quote "$repo_path") - your shell cwd is inside the worktree you are about to delete.
    - Only if git -C $(shell_quote "$wt_path") status --porcelain is empty, run git -C $(shell_quote "$repo_path") worktree remove $(shell_quote "$wt_path"). If the worktree has local changes, keep it and say so.
    - Only after removal succeeds, and only if the branch has no locally created commits to preserve, run git -C $(shell_quote "$repo_path") branch -D $branch_name, git -C $(shell_quote "$repo_path") update-ref -d $remote_ref, and git -C $(shell_quote "$repo_path") worktree prune.

@@ -97,6 +97,19 @@ class LauncherTests(unittest.TestCase):
         self.assertIn("PR monitor", result.stdout)
         self.assertNotIn("Use the organization", self.launch().stdout)
 
+    def test_t3_cleanup_stops_watcher_before_removing_worktree(self):
+        self.settings.update(default_cli="t3code", monitor=True, posting_policy="comment")
+        self.save_config()
+        for name, content in (("t3-review.py", "import sys; print(sys.stdin.read())\n"),
+                ("t3_monitor.py", "")):
+            helper = self.home / "resources" / name
+            helper.write_text("#!/usr/bin/env python3\n" + content)
+            helper.chmod(0o755)
+        result = self.launch()
+        self.assertIn("--stop-worktree", result.stdout)
+        self.assertIn(".agent-pr-review/worktrees/pr-42", result.stdout)
+        self.assertLess(result.stdout.index("--stop-worktree"), result.stdout.index("worktree remove"))
+
     def test_ambiguity_requires_explicit_repo_and_wrong_remote_is_rejected(self):
         other = self.home / "code/duplicate"
         self.git("clone", str(self.bare), str(other))

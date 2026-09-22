@@ -17,7 +17,8 @@ STAMP = "2026-09-19T04:00:00Z"
 def state():
     return {"threadId": "17f60f03-3ff8-4b4f-8e3f-e638f396bf10", "prUrl": "https://github.example/team/repo/pull/42",
         "host": "github.example", "repo": "team/repo", "number": 42, "since": STAMP,
-        "head": "old-head", "feedback": {}, "pending": {}, "delivery": None, "closed": None, "enabled": True}
+        "head": "old-head", "worktreePath": "/code/repo/.agent-pr-review/worktrees/pr-42",
+        "feedback": {}, "pending": {}, "delivery": None, "closed": None, "enabled": True}
 
 
 class Client:
@@ -61,6 +62,24 @@ class PolicyTests(unittest.TestCase):
             monitor.stop(root, saved["threadId"])
             self.assertFalse(monitor.read(target)["enabled"])
             self.assertEqual(monitor.read(target)["head"], saved["head"])
+
+    def test_stop_worktree_disables_only_matching_watcher(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            matching = state()
+            other = dict(state(), threadId="27f60f03-3ff8-4b4f-8e3f-e638f396bf10",
+                worktreePath="/code/other/.agent-pr-review/worktrees/pr-42")
+            matching_path = root / (matching["threadId"] + ".json")
+            other_path = root / (other["threadId"] + ".json")
+            monitor.save(matching_path, matching)
+            monitor.save(other_path, other)
+
+            self.assertEqual(monitor.stop_worktree(root, matching["worktreePath"]), 1)
+
+            stopped = monitor.read(matching_path)
+            self.assertFalse(stopped["enabled"])
+            self.assertEqual(stopped["stoppedReason"], "Stopped by review cleanup")
+            self.assertTrue(monitor.read(other_path)["enabled"])
 
 
 class DeliveryTests(unittest.TestCase):
@@ -224,7 +243,8 @@ class PollingTests(unittest.TestCase):
     def test_reopening_preserves_pending_changes_and_the_head_cursor(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(monitor, "ensure"), patch.object(monitor.shutil, "which", return_value="/custom/bin/gh"):
             root = Path(tmp)
-            payload = {"prUrl": state()["prUrl"], "headSha": "old-head"}
+            payload = {"prUrl": state()["prUrl"], "headSha": "old-head",
+                "worktreePath": state()["worktreePath"]}
             path = monitor.register(root, Path("/t3"), payload, state()["threadId"], STAMP)
             saved = monitor.read(path)
             monitor.observe(saved, {"head": "new-head", "feedback": {}, "closed": None})
