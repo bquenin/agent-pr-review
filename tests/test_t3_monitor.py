@@ -270,7 +270,9 @@ class PollingTests(unittest.TestCase):
             monitor.save(bad, dict(state(), enabled=True, threadId="aaaaaaaa-1111-4111-8111-bbbbbbbbbbbb"))
             started = []
             def fake_ensure(path):
-                if path == bad:
+                # Compare names: ensure_all resolve()s the directory, and macOS
+                # TemporaryDirectory paths often live behind /var -> /private/var.
+                if path.name == bad.name:
                     raise RuntimeError("boom")
                 started.append(path.name)
             with patch.object(monitor, "ensure", side_effect=fake_ensure):
