@@ -261,6 +261,24 @@ class PollingTests(unittest.TestCase):
             monitor.GitHub("github.example", "/custom/bin/gh")
         self.assertEqual(run.call_args.args[0][0], "/custom/bin/gh")
 
+    def test_ensure_all_starts_every_enabled_watcher_and_keeps_going_after_a_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            good = root / (state()["threadId"] + ".json")
+            bad = root / "aaaaaaaa-1111-4111-8111-bbbbbbbbbbbb.json"
+            monitor.save(good, state())
+            monitor.save(bad, dict(state(), enabled=True, threadId="aaaaaaaa-1111-4111-8111-bbbbbbbbbbbb"))
+            started = []
+            def fake_ensure(path):
+                if path == bad:
+                    raise RuntimeError("boom")
+                started.append(path.name)
+            with patch.object(monitor, "ensure", side_effect=fake_ensure):
+                errors = monitor.ensure_all(root)
+            self.assertEqual(started, [good.name])
+            self.assertEqual(errors, [f"{bad.name}: boom"])
+            self.assertEqual(monitor.ensure_all(root / "missing"), [])
+
 
 if __name__ == "__main__":
     unittest.main()

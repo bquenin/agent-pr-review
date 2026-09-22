@@ -121,6 +121,25 @@ def ensure(path):
         time.sleep(0.05)
 
 
+def ensure_all(root):
+    """Start every enabled watcher that is not already running.
+
+    Host reboot, install, and every T3 launch use this so a sibling review is
+    not left dead because only the current PR was registered. One watcher
+    failing to start does not prevent the rest from starting.
+    """
+    root = Path(root).expanduser().resolve()
+    if not root.is_dir():
+        return []
+    errors = []
+    for path in sorted(root.glob("*.json")):
+        try:
+            ensure(path)
+        except (OSError, ValueError, KeyError, RuntimeError) as error:
+            errors.append(f"{path.name}: {error}")
+    return errors
+
+
 class GitHub:
     def __init__(self, host, binary="gh"):
         self.host = host
@@ -332,16 +351,19 @@ def main():
     elif args.stop_worktree:
         if not stop_worktree(root, args.stop_worktree):
             raise SystemExit(f"No saved watcher for worktree {args.stop_worktree}")
+    elif args.ensure:
+        errors = ensure_all(root)
+        for error in errors:
+            print(error, file=sys.stderr)
+        if errors:
+            raise SystemExit(1)
     else:
         for path in sorted(root.glob("*.json")):
-            if args.ensure:
-                ensure(path)
-            else:
-                state = read(path)
-                print(json.dumps({"threadId": state["threadId"], "prUrl": state["prUrl"],
-                    "enabled": state["enabled"], "running": running(path),
-                    "pending": len(state["pending"]), **{k: state.get(k) for k in
-                    ("lastPollAt", "lastCheckAt", "lastDeliveredAt", "lastTurnId", "lastError", "stoppedReason")}}))
+            state = read(path)
+            print(json.dumps({"threadId": state["threadId"], "prUrl": state["prUrl"],
+                "enabled": state["enabled"], "running": running(path),
+                "pending": len(state["pending"]), **{k: state.get(k) for k in
+                ("lastPollAt", "lastCheckAt", "lastDeliveredAt", "lastTurnId", "lastError", "stoppedReason")}}))
 
 
 if __name__ == "__main__":
