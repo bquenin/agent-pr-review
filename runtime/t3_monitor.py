@@ -63,11 +63,13 @@ def register(root, base, payload, thread_id, since):
             state = {"threadId": thread_id, "prUrl": payload["prUrl"],
                 "host": url.hostname, "repo": match[1], "number": int(match[2]),
                 "baseDir": str(base), "since": since, "head": payload["headSha"],
-                "feedback": {}, "pending": {}, "delivery": None, "closed": None}
+                "worktreePath": payload["worktreePath"], "feedback": {}, "pending": {},
+                "delivery": None, "closed": None}
         gh_path = shutil.which("gh")
         if not gh_path:
             raise RuntimeError("gh is required for automatic PR monitoring")
-        state.update(enabled=True, stoppedReason=None, ghPath=gh_path, resumePrompt=payload.get("resumePrompt", ""))
+        state.update(enabled=True, stoppedReason=None, ghPath=gh_path,
+            worktreePath=payload["worktreePath"], resumePrompt=payload.get("resumePrompt", ""))
         save(path, state)
     ensure(path)
     return path
@@ -81,6 +83,19 @@ def stop(root, thread_id):
         state = read(path)
         state.update(enabled=False, stoppedReason="Monitoring disabled")
         save(path, state)
+
+
+def stop_worktree(root, worktree_path):
+    stopped = 0
+    for path in root.glob("*.json"):
+        with locked(path.with_suffix(".lock")):
+            state = read(path)
+            if state.get("worktreePath") != worktree_path:
+                continue
+            state.update(enabled=False, stoppedReason="Stopped by review cleanup")
+            save(path, state)
+            stopped += 1
+    return stopped
 
 
 def running(path):
@@ -297,6 +312,7 @@ def main():
     actions.add_argument("--ensure", action="store_true")
     actions.add_argument("--status", action="store_true")
     actions.add_argument("--stop", metavar="THREAD_ID")
+    actions.add_argument("--stop-worktree", metavar="PATH")
     actions.add_argument("--install-cron", action="store_true")
     args = parser.parse_args()
     root = args.directory.expanduser().resolve()
@@ -313,6 +329,9 @@ def main():
             state = read(path)
             state.update(enabled=False, stoppedReason="Stopped by user")
             save(path, state)
+    elif args.stop_worktree:
+        if not stop_worktree(root, args.stop_worktree):
+            raise SystemExit(f"No saved watcher for worktree {args.stop_worktree}")
     else:
         for path in sorted(root.glob("*.json")):
             if args.ensure:
