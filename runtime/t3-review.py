@@ -299,12 +299,14 @@ def main():
         fcntl.flock(lock, fcntl.LOCK_EX)
         with connect(base) as client:
             result = launch(client, payload, settings, config, environment_id)
-        from t3_monitor import register, stop
+        from t3_monitor import register, stop, ensure_all
         monitor_path = None
         if payload.get("monitorEnabled", False):
             monitor_path = register(lock_dir / "t3-monitors", base, payload, result["threadId"], monitor_since)
         else:
             stop(lock_dir / "t3-monitors", result["threadId"])
+        # Opening any review also restarts siblings left dead after a host restart.
+        ensure_all(lock_dir / "t3-monitors")
         print(json.dumps({**result, "monitor": str(monitor_path) if monitor_path else None}))
 
 

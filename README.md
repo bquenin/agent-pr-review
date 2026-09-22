@@ -71,7 +71,9 @@ in the container must be included in its image or reinstalled after rebuilding.
 The supplied configuration does not mount your host home, credentials, or Docker
 socket. Authenticate inside it, or configure your own credential forwarding.
 Stopping the container stops review processes; saved T3 watchers restart when
-it starts again. The T3 server itself must be running before they can reconnect.
+it starts again (devcontainer `postStartCommand`, and every T3 launch also
+restarts every saved watcher so a sibling review is not left dead). The T3
+server itself must be running before they can reconnect.
 
 For a CLI-only setup, no Mac bridge or SSH server is needed. For browser launches,
 create `~/.config/agent-pr-review/config.json` **on the Mac**:
@@ -198,9 +200,11 @@ native messaging registration depend on that path. Source files are never edited
 by installation.
 
 Each installer deploys only its own environment. Re-run the relevant installer after
-source updates; installed runtime files are copies. T3 watcher supervision is
-optional: `bash runtime/install.sh --enable-supervision` adds a marked cron entry
-without replacing other jobs. Existing saved watchers are restarted on install.
+source updates; installed runtime files are copies. Existing saved watchers are
+restarted on install and whenever any T3 review is launched. Optional cron
+supervision (`bash runtime/install.sh --enable-supervision`) covers crashes
+while the host stays up; hosts that rebuild user crontab (or lack cron) should
+restart watchers from their login/startup hook instead.
 
 ## Use
 

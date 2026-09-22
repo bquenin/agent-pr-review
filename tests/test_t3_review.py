@@ -273,6 +273,7 @@ class LaunchTests(unittest.TestCase):
             result = json.loads(output.getvalue())
             watcher.register.assert_called_once_with(resources / "t3-monitors", base, PAYLOAD,
                 first["threadId"], "2026-09-19T04:00:00Z")
+            watcher.ensure_all.assert_called_once_with(resources / "t3-monitors")
         self.assertEqual(result["threadId"], first["threadId"])
         self.assertEqual(result["action"], "reused")
         self.assertEqual(len(self.client.commands), 3)
@@ -296,6 +297,7 @@ class LaunchTests(unittest.TestCase):
                 t3.main()
             watcher.register.assert_not_called()
             watcher.stop.assert_called_once()
+            watcher.ensure_all.assert_called_once()
             self.assertIsNone(json.loads(output.getvalue())["monitor"])
 
     def test_active_session_without_latest_turn_is_not_interrupted(self):
