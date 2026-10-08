@@ -204,6 +204,23 @@ class DeliveryTests(unittest.TestCase):
         self.tick()
         self.assertEqual(len(self.client.commands), 1)
 
+    def test_failed_start_queued_before_close_still_delivers_the_close(self):
+        self.update()
+        self.tick()
+        self.update(closed="merged")
+        self.fail_start_then_settle()
+        self.tick()
+        self.assertTrue(self.state["enabled"])
+        self.assertIsNone(self.state["delivery"])
+        self.tick()
+        self.assertEqual(len(self.client.commands), 2)
+        self.assertEqual(self.state["delivery"]["closed"], "merged")
+        self.assertIn("lifecycle", self.state["delivery"]["events"])
+        self.client.thread["latestTurn"]["state"] = "completed"
+        self.tick()
+        self.assertFalse(self.state["enabled"])
+        self.assertEqual(self.state["stoppedReason"], "PR merged")
+
     def test_settled_failed_start_of_open_pr_retries_with_fresh_command(self):
         self.update()
         self.tick()

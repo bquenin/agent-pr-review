@@ -250,9 +250,10 @@ def deliver(client, state, persist, timestamp):
                 # Settling or stopping the thread right after a failed start
                 # replaces the session error with "stopped" before we poll.
                 or seen and not moved_on and session.get("status") == "stopped" and changed):
-            if state["closed"]:
-                # The PR is finished, so a retry would only reopen a settled
-                # thread to repeat the start that just failed.
+            if delivery["closed"] and state["closed"] == delivery["closed"]:
+                # The failed turn was the final one, so a retry would only reopen
+                # a settled thread to repeat it. A delivery queued before the PR
+                # closed retries below, carrying the close event.
                 state.update(delivery=None, enabled=False,
                     stoppedReason=f"PR {state['closed']}; the final turn did not start")
                 persist()
