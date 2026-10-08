@@ -10,6 +10,9 @@ from unittest.mock import patch
 spec = importlib.util.spec_from_file_location("t3_monitor", Path(__file__).parents[1] / "runtime/t3_monitor.py")
 monitor = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(monitor)
+review_spec = importlib.util.spec_from_file_location("t3_review", Path(__file__).parents[1] / "runtime/t3-review.py")
+review = importlib.util.module_from_spec(review_spec)
+review_spec.loader.exec_module(review)
 
 STAMP = "2026-09-19T04:00:00Z"
 
@@ -159,6 +162,26 @@ class DeliveryTests(unittest.TestCase):
         self.assertTrue(self.state["pending"])
         self.tick()
         self.assertNotEqual(self.client.commands[-1]["commandId"], original)
+
+    def test_server_rejection_retries_with_fresh_command_and_keeps_events(self):
+        # 10/8: a stale T3 server rejected the start (unknown thread) and then
+        # replayed that rejection for the same command id every poll.
+        self.update()
+        rejection = review.APIError("T3 API /api/orchestration/dispatch: HTTP 500", 500)
+        with patch.object(self.client, "dispatch", side_effect=rejection):
+            with self.assertRaises(review.APIError):
+                self.tick()
+        original = self.persisted["delivery"]["commandId"]
+        self.assertTrue(self.persisted["delivery"]["rejected"])
+        self.state = copy.deepcopy(self.persisted)
+        self.tick()
+        self.assertIsNone(self.state["delivery"])
+        self.assertTrue(self.state["pending"])
+        self.tick()
+        self.assertNotEqual(self.client.commands[0]["commandId"], original)
+        self.client.thread["latestTurn"]["state"] = "completed"
+        self.tick()
+        self.assertFalse(self.state["pending"])
 
     def test_changes_while_delivery_is_in_flight_are_not_acknowledged_early(self):
         self.update()

@@ -246,6 +246,13 @@ def deliver(client, state, persist, timestamp):
             state.update(delivery=None, lastError=session.get("lastError") or "T3 turn failed to start")
             persist()
             return
+        if delivery.get("rejected") and not seen:
+            # The server refused the command itself (e.g. its thread was unknown
+            # to a stale server). T3 replays that refusal for the same command id
+            # forever, so only a fresh command can deliver the queued events.
+            state.update(delivery=None, lastError="T3 rejected the turn start; retrying with a fresh command")
+            persist()
+            return
     if busy(thread) or not state["pending"] or not state["enabled"]:
         return
     if delivery is None:
@@ -255,10 +262,18 @@ def deliver(client, state, persist, timestamp):
         state["delivery"] = delivery
         # Persist before HTTP: retry the SAME command after a crash or lost ack.
         persist()
-    client.dispatch("thread.turn.start", commandId=delivery["commandId"], threadId=state["threadId"],
-        message={"messageId": delivery["messageId"], "role": "user", "text": delivery["text"], "attachments": []},
-        modelSelection=thread["modelSelection"], runtimeMode=thread["runtimeMode"],
-        interactionMode="default", createdAt=delivery["createdAt"])
+    try:
+        client.dispatch("thread.turn.start", commandId=delivery["commandId"], threadId=state["threadId"],
+            message={"messageId": delivery["messageId"], "role": "user", "text": delivery["text"], "attachments": []},
+            modelSelection=thread["modelSelection"], runtimeMode=thread["runtimeMode"],
+            interactionMode="default", createdAt=delivery["createdAt"])
+    except RuntimeError as error:
+        # An HTTP error status means the server answered and did not apply the
+        # command. A lost connection proves nothing, so that keeps the same id.
+        if getattr(error, "status", None):
+            delivery["rejected"] = True
+            persist()
+        raise
 
 
 def worker(path):
