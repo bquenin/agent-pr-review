@@ -37,6 +37,14 @@ def now():
     return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
+class APIError(RuntimeError):
+    """The T3 server answered with an HTTP error status."""
+
+    def __init__(self, message, status):
+        super().__init__(message)
+        self.status = status
+
+
 class Client:
     def __init__(self, origin, token):
         url = urllib.parse.urlsplit(origin)
@@ -56,7 +64,7 @@ class Client:
                 return json.load(response)
         except urllib.error.HTTPError as error:
             error.close()
-            raise RuntimeError(f"T3 API {path}: HTTP {error.code}; check the server log") from None
+            raise APIError(f"T3 API {path}: HTTP {error.code}; check the server log", error.code) from None
 
     def dispatch(self, kind, **fields):
         return self.request("/api/orchestration/dispatch", {

@@ -10,6 +10,9 @@ from unittest.mock import patch
 spec = importlib.util.spec_from_file_location("t3_monitor", Path(__file__).parents[1] / "runtime/t3_monitor.py")
 monitor = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(monitor)
+review_spec = importlib.util.spec_from_file_location("t3_review", Path(__file__).parents[1] / "runtime/t3-review.py")
+review = importlib.util.module_from_spec(review_spec)
+review_spec.loader.exec_module(review)
 
 STAMP = "2026-09-19T04:00:00Z"
 
@@ -29,11 +32,15 @@ class Client:
         self.commands = []
         self.receipts = set()
         self.fail_after_accept = False
+        self.latest_turn_messages = None
 
     def request(self, path):
         if path.endswith("snapshot"):
             return {"threads": [copy.deepcopy(self.thread)]}
-        return {"thread": copy.deepcopy(self.thread)}
+        thread = copy.deepcopy(self.thread)
+        if path.endswith("turnLimit=1") and self.latest_turn_messages is not None:
+            thread["messages"] = thread["messages"][-self.latest_turn_messages:]
+        return {"thread": thread}
 
     def dispatch(self, kind, **fields):
         if fields["commandId"] in self.receipts:
@@ -159,6 +166,91 @@ class DeliveryTests(unittest.TestCase):
         self.assertTrue(self.state["pending"])
         self.tick()
         self.assertNotEqual(self.client.commands[-1]["commandId"], original)
+
+    def test_server_rejection_retries_with_fresh_command_and_keeps_events(self):
+        # 10/8: a stale T3 server rejected the start (unknown thread) and then
+        # replayed that rejection for the same command id every poll.
+        self.update()
+        rejection = review.APIError("T3 API /api/orchestration/dispatch: HTTP 500", 500)
+        with patch.object(self.client, "dispatch", side_effect=rejection):
+            with self.assertRaises(review.APIError):
+                self.tick()
+        original = self.persisted["delivery"]["commandId"]
+        self.assertTrue(self.persisted["delivery"]["rejected"])
+        self.state = copy.deepcopy(self.persisted)
+        self.tick()
+        self.assertIsNone(self.state["delivery"])
+        self.assertTrue(self.state["pending"])
+        self.tick()
+        self.assertNotEqual(self.client.commands[0]["commandId"], original)
+        self.client.thread["latestTurn"]["state"] = "completed"
+        self.tick()
+        self.assertFalse(self.state["pending"])
+
+    def fail_start_then_settle(self):
+        # The provider start fails, then a settle stops the session, so the
+        # watcher only sees "stopped" and no new turn.
+        self.client.thread.update(latestTurn={"turnId": "initial", "state": "completed"},
+            session={"status": "stopped", "updatedAt": STAMP})
+
+    def test_settled_failed_final_turn_stops_watcher_of_finished_pr(self):
+        self.update(closed="merged")
+        self.tick()
+        self.fail_start_then_settle()
+        self.tick()
+        self.assertFalse(self.state["enabled"])
+        self.assertIsNone(self.state["delivery"])
+        self.assertIn("did not start", self.state["stoppedReason"])
+        self.tick()
+        self.assertEqual(len(self.client.commands), 1)
+
+    def test_failed_start_queued_before_close_still_delivers_the_close(self):
+        self.update()
+        self.tick()
+        self.update(closed="merged")
+        self.fail_start_then_settle()
+        self.tick()
+        self.assertTrue(self.state["enabled"])
+        self.assertIsNone(self.state["delivery"])
+        self.tick()
+        self.assertEqual(len(self.client.commands), 2)
+        self.assertEqual(self.state["delivery"]["closed"], "merged")
+        self.assertIn("lifecycle", self.state["delivery"]["events"])
+        self.client.thread["latestTurn"]["state"] = "completed"
+        self.tick()
+        self.assertFalse(self.state["enabled"])
+        self.assertEqual(self.state["stoppedReason"], "PR merged")
+
+    def test_settled_failed_start_of_open_pr_retries_with_fresh_command(self):
+        self.update()
+        self.tick()
+        original = self.client.commands[0]["commandId"]
+        self.fail_start_then_settle()
+        self.tick()
+        self.assertIsNone(self.state["delivery"])
+        self.assertTrue(self.state["pending"])
+        self.tick()
+        self.assertNotEqual(self.client.commands[-1]["commandId"], original)
+
+    def test_delivery_is_found_after_later_turns_hide_it_from_the_latest_turn(self):
+        self.update()
+        self.tick()
+        # The user interrupted the woken turn and ran turns of their own.
+        self.client.thread["messages"].append({"id": "later-user-message"})
+        self.client.thread["latestTurn"] = {"turnId": "later", "state": "completed"}
+        self.client.latest_turn_messages = 1
+        self.tick()
+        self.assertIsNone(self.state["delivery"])
+        self.assertFalse(self.state["pending"])
+        self.assertEqual(self.state["lastTurnId"], "later")
+
+    def test_interrupted_woken_turn_counts_as_delivered(self):
+        self.update()
+        self.tick()
+        self.client.thread["latestTurn"]["state"] = "interrupted"
+        self.tick()
+        self.assertIsNone(self.state["delivery"])
+        self.assertFalse(self.state["pending"])
 
     def test_changes_while_delivery_is_in_flight_are_not_acknowledged_early(self):
         self.update()

@@ -228,9 +228,14 @@ def deliver(client, state, persist, timestamp):
     session = thread.get("session") or {}
     delivery = state.get("delivery")
     if delivery:
+        moved_on = latest.get("turnId") and latest["turnId"] != delivery["previousTurnId"]
         seen = any(m["id"] == delivery["messageId"] for m in thread.get("messages", []))
-        if (seen and latest.get("turnId") and latest["turnId"] != delivery["previousTurnId"]
-                and latest.get("state") in ("running", "completed")):
+        if not seen and moved_on:
+            # Later turns push the delivered message out of the one-turn window.
+            wider = client.request(f"/api/orchestration/threads/{state['threadId']}?turnLimit=50")["thread"]
+            seen = any(m["id"] == delivery["messageId"] for m in wider.get("messages", []))
+        # An interrupted turn still received the message; the user took over.
+        if seen and moved_on and latest.get("state") in ("running", "completed", "interrupted"):
             for key, value in delivery["events"].items():
                 if state["pending"].get(key) == value:
                     del state["pending"][key]
@@ -239,11 +244,30 @@ def deliver(client, state, persist, timestamp):
                 state.update(enabled=False, stoppedReason="PR " + state["closed"])
             persist()
             return
-        if (session.get("status") == "error" and session.get("updatedAt", "") >= delivery["createdAt"]
-                or seen and latest.get("turnId") != delivery["previousTurnId"] and latest.get("state") == "error"):
+        changed = session.get("updatedAt", "") >= delivery["createdAt"]
+        if (session.get("status") == "error" and changed
+                or seen and moved_on and latest.get("state") == "error"
+                # Settling or stopping the thread right after a failed start
+                # replaces the session error with "stopped" before we poll.
+                or seen and not moved_on and session.get("status") == "stopped" and changed):
+            if delivery["closed"] and state["closed"] == delivery["closed"]:
+                # The failed turn was the final one, so a retry would only reopen
+                # a settled thread to repeat it. A delivery queued before the PR
+                # closed retries below, carrying the close event.
+                state.update(delivery=None, enabled=False,
+                    stoppedReason=f"PR {state['closed']}; the final turn did not start")
+                persist()
+                return
             # A rejected provider start has a durable command receipt. Retry with
             # a fresh command; replaying the rejected start would never wake T3.
             state.update(delivery=None, lastError=session.get("lastError") or "T3 turn failed to start")
+            persist()
+            return
+        if delivery.get("rejected") and not seen:
+            # The server refused the command itself (e.g. its thread was unknown
+            # to a stale server). T3 replays that refusal for the same command id
+            # forever, so only a fresh command can deliver the queued events.
+            state.update(delivery=None, lastError="T3 rejected the turn start; retrying with a fresh command")
             persist()
             return
     if busy(thread) or not state["pending"] or not state["enabled"]:
@@ -255,10 +279,18 @@ def deliver(client, state, persist, timestamp):
         state["delivery"] = delivery
         # Persist before HTTP: retry the SAME command after a crash or lost ack.
         persist()
-    client.dispatch("thread.turn.start", commandId=delivery["commandId"], threadId=state["threadId"],
-        message={"messageId": delivery["messageId"], "role": "user", "text": delivery["text"], "attachments": []},
-        modelSelection=thread["modelSelection"], runtimeMode=thread["runtimeMode"],
-        interactionMode="default", createdAt=delivery["createdAt"])
+    try:
+        client.dispatch("thread.turn.start", commandId=delivery["commandId"], threadId=state["threadId"],
+            message={"messageId": delivery["messageId"], "role": "user", "text": delivery["text"], "attachments": []},
+            modelSelection=thread["modelSelection"], runtimeMode=thread["runtimeMode"],
+            interactionMode="default", createdAt=delivery["createdAt"])
+    except RuntimeError as error:
+        # An HTTP error status means the server answered and did not apply the
+        # command. A lost connection proves nothing, so that keeps the same id.
+        if getattr(error, "status", None):
+            delivery["rejected"] = True
+            persist()
+        raise
 
 
 def worker(path):
