@@ -280,7 +280,8 @@ def main():
     parser.add_argument("action", choices=("validate", "get", "url", "repo", "remote"))
     parser.add_argument("values", nargs="*")
     parser.add_argument("--clone", action="store_true", help="repo: clone into clone_root when no clone exists")
-    args = parser.parse_args()
+    # Before Python 3.12, parse_args stops filling values once --clone appears.
+    args = parser.parse_intermixed_args()
     config = load()
     if args.action == "get":
         value = config[args.values[0]]
