@@ -60,9 +60,9 @@ class LauncherTests(unittest.TestCase):
     def save_config(self):
         self.config.write_text(json.dumps(self.settings))
 
-    def launch(self, host="github.com", *args, ok=True):
+    def launch(self, host="github.com", *args, ok=True, repo="repo"):
         result = subprocess.run(["bash", str(ROOT / "runtime/agent-pr-review"), "--print-cmd", "--no-tmux",
-            f"https://{host}/team/repo/pull/42", *args], env=self.env, capture_output=True, text=True, timeout=30)
+            f"https://{host}/team/{repo}/pull/42", *args], env=self.env, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode == 0, ok, result.stdout + result.stderr)
         return result
 
@@ -117,6 +117,58 @@ class LauncherTests(unittest.TestCase):
         self.assertIn("Use --repo", self.launch(ok=False).stderr)
         self.launch("github.com", "--repo", str(other))
         self.assertIn("No fetch remote", self.launch("github.com", "--repo", str(self.repos[HOSTS[1]]), ok=False).stderr)
+
+    def enable_clones(self, protocol="ssh"):
+        self.settings.update(clone_root=str(self.home / "code/clones"), clone_protocol=protocol)
+        self.save_config()
+        return self.home / "code/clones"
+
+    def redirect(self, url, target):
+        self.git("config", "--global", "--add", f"url.{target}.insteadOf", url)
+
+    def test_missing_clone_is_cloned_into_clone_root_with_the_configured_protocol(self):
+        for protocol, repo, url in (("ssh", "other", "git@github.com:team/other.git"),
+                ("https", "third", "https://github.com/team/third.git")):
+            with self.subTest(protocol=protocol):
+                clones = self.enable_clones(protocol)
+                self.redirect(url, self.bare.as_uri())
+                result = self.launch(repo=repo)
+                target = clones / "team" / repo
+                self.assertIn(f"Cloning {url} into {target}", result.stderr)
+                self.assertEqual(self.git("-C", str(target), "config", "remote.origin.url"), url)
+                self.assertEqual(self.worktree(result).parent.parent.parent, target)
+                # Later launches discover the new clone instead of cloning again.
+                again = self.launch(repo=repo)
+                self.assertNotIn("Cloning", again.stderr)
+                self.assertEqual(self.worktree(again), self.worktree(result))
+
+    def test_clone_fallback_never_overwrites_and_cleans_up_only_its_own_failure(self):
+        clones = self.enable_clones("https")
+        existing = clones / "team/other"
+        existing.mkdir(parents=True)
+        (existing / "keep.txt").write_text("mine\n")
+        self.redirect("https://github.com/team/other.git", self.bare.as_uri())
+        self.assertIn("exists and is not a clone", self.launch(repo="other", ok=False).stderr)
+        self.assertEqual((existing / "keep.txt").read_text(), "mine\n")
+        self.redirect("https://github.com/team/missing.git", (self.home / "absent.git").as_uri())
+        result = self.launch(repo="missing", ok=False)
+        self.assertIn("git clone of https://github.com/team/missing.git failed", result.stderr)
+        self.assertFalse((clones / "team/missing").exists())
+        self.assertEqual((existing / "keep.txt").read_text(), "mine\n")
+
+    def test_clone_fallback_is_disabled_by_default_and_never_resolves_ambiguity(self):
+        self.redirect("git@github.com:team/other.git", self.bare.as_uri())
+        self.assertIn("No unambiguous matching clone", self.launch(repo="other", ok=False).stderr)
+        self.assertFalse((self.home / "code/team").exists())
+        clones = self.enable_clones()
+        other = self.home / "code/duplicate"
+        self.git("clone", str(self.bare), str(other))
+        self.git("-C", str(other), "remote", "set-url", "origin", "https://github.com/team/repo.git")
+        result = self.launch(ok=False)
+        self.assertIn("Use --repo", result.stderr)
+        self.assertNotIn("Cloning", result.stderr)
+        self.assertFalse(clones.exists())
+        self.assertNotIn("Cloning", self.launch("github.com", "--repo", str(other)).stderr)
 
     def test_dirty_worktree_and_fetch_failure_never_launch_canonical_checkout(self):
         worktree = self.worktree(self.launch())

@@ -1,9 +1,12 @@
 """Shared, data-only configuration and GitHub URL/repository validation."""
 import argparse
+import contextlib
 import json
 import os
 from pathlib import Path
 import re
+import shutil
+import signal
 import subprocess
 import sys
 from urllib.parse import parse_qs, urlsplit
@@ -27,10 +30,14 @@ DEFAULTS = {
     "trust_worktrees": False,
     "posting_policy": "review-only",
     "monitor": False,
+    "clone_root": "",
+    "clone_protocol": "ssh",
+    "auto_review_hosts": [],
 }
 HOST = re.compile(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*")
 COMPONENT = r"[A-Za-z0-9_.-]+"
 PR_PATH = re.compile(rf"/({COMPONENT})/({COMPONENT})/pull/([1-9][0-9]*)(?:/(?:files|commits|checks))?/?")
+CLONE_TIMEOUT_SECONDS = 15 * 60
 
 
 def config_path():
@@ -91,6 +98,26 @@ def load(config_file=None):
     for root in config["repo_roots"]:
         if not Path(root).expanduser().is_absolute() or any(ord(c) < 32 for c in root):
             raise ValueError("repo_roots must be absolute paths or start with ~/")
+    if config["clone_root"]:
+        clone_root = Path(config["clone_root"]).expanduser()
+        if not clone_root.is_absolute():
+            raise ValueError("clone_root must be an absolute path or start with ~/")
+        # Discovery searches four levels below a root and clones land at
+        # clone_root/owner/repository, so later launches find what we cloned.
+        clone_root = clone_root.resolve()
+        roots = [Path(root).expanduser().resolve() for root in config["repo_roots"]]
+        if not any(clone_root.is_relative_to(root) and len(clone_root.relative_to(root).parts) <= 2 for root in roots):
+            raise ValueError("clone_root must be inside a repo_roots entry, at most two levels deep")
+    if config["clone_protocol"] not in ("ssh", "https"):
+        raise ValueError("clone_protocol must be ssh or https")
+    if not all(isinstance(host, str) for host in config["auto_review_hosts"]):
+        raise ValueError("auto_review_hosts must be a list of hostnames")
+    config["auto_review_hosts"] = list(dict.fromkeys(h.lower() for h in config["auto_review_hosts"]))
+    if not set(config["auto_review_hosts"]) <= set(config["github_hosts"]):
+        raise ValueError("auto_review_hosts must be configured github_hosts")
+    if config["auto_review_hosts"] and config["default_cli"] != "t3code":
+        # Automatic launches run unattended; T3 is the only backend without a terminal.
+        raise ValueError("auto_review_hosts requires default_cli t3code")
     return config
 
 
@@ -155,7 +182,73 @@ def matching_remote(directory, expected, aliases):
     return "origin" if "origin" in matches else sorted(matches)[0]
 
 
-def select_repo(config, expected, explicit=None):
+def run_with_timeout(command, timeout, **kwargs):
+    """Run a command in its own process group and kill the whole group on overrun or interrupt."""
+    with subprocess.Popen(command, start_new_session=True, **kwargs) as process:
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as error:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+            error.output, error.stderr = process.communicate()
+            raise
+        except BaseException:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+            raise
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
+def clone_url(config, host, owner, repo):
+    if config["clone_protocol"] == "https":
+        return f"https://{host}/{owner}/{repo}.git"
+    return f"git@{host}:{owner}/{repo}.git"
+
+
+def clone_repo(config, expected):
+    match = re.fullmatch(rf"([^/]+)/({COMPONENT})/({COMPONENT})", expected)
+    if not match or not HOST.fullmatch(match[1]) or {match[2], match[3]} & {".", ".."}:
+        raise ValueError(f"Invalid repository identity {expected}")
+    host, owner, repo = match.groups()
+    target = Path(config["clone_root"]).expanduser().resolve() / owner / repo
+    if target.exists() or target.is_symlink():
+        # Discovery can miss a clone below another checkout; reuse it, but never
+        # replace a directory that belongs to something else.
+        try:
+            if (target / ".git").exists():
+                matching_remote(target, expected, config["remote_host_aliases"])
+                return target
+        except (ValueError, subprocess.CalledProcessError):
+            pass
+        raise ValueError(f"{target} exists and is not a clone of {expected}; move it or use --repo PATH")
+    url = clone_url(config, host, owner, repo)
+    created = []  # Missing ancestors, deepest first, to remove again on failure.
+    for directory in (target.parent, *target.parent.parents):
+        if directory.exists():
+            break
+        created.append(directory)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    print(f"agent-pr-review: Cloning {url} into {target}", file=sys.stderr, flush=True)
+    try:
+        # Progress goes to stderr: stdout carries only the selected path.
+        result = run_with_timeout(["git", "clone", "--filter=blob:none", url, str(target)],
+            CLONE_TIMEOUT_SECONDS, stdin=subprocess.DEVNULL, stdout=sys.stderr,
+            env=dict(os.environ, GIT_TERMINAL_PROMPT="0"))
+        if result.returncode:
+            raise ValueError(f"git clone of {url} failed (exit {result.returncode})")
+    except BaseException as error:
+        # The target did not exist before, so everything in it is ours.
+        shutil.rmtree(target, ignore_errors=True)
+        for directory in created:
+            with contextlib.suppress(OSError):
+                directory.rmdir()
+        if isinstance(error, subprocess.TimeoutExpired):
+            raise ValueError(f"git clone of {url} timed out after {CLONE_TIMEOUT_SECONDS // 60} minutes") from None
+        raise
+    return target
+
+
+def select_repo(config, expected, explicit=None, clone=False):
     if explicit:
         directory = Path(explicit).expanduser().resolve()
         matching_remote(directory, expected, config["remote_host_aliases"])
@@ -174,6 +267,8 @@ def select_repo(config, expected, explicit=None):
                 dirs[:] = []
             else:
                 dirs[:] = [d for d in dirs if d not in (".git", ".agent-pr-review", ".venv", "node_modules")] if len(relative.parts) < 4 else []
+    if not candidates and clone and config["clone_root"]:
+        return clone_repo(config, expected)
     if len(candidates) != 1:
         detail = ", ".join(str(p) for p in sorted(candidates)) or "none"
         raise ValueError(f"Expected one clone of {expected}; found {detail}. Use --repo PATH or configure repo_roots.")
@@ -184,13 +279,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("validate", "get", "url", "repo", "remote"))
     parser.add_argument("values", nargs="*")
+    parser.add_argument("--clone", action="store_true", help="repo: clone into clone_root when no clone exists")
     args = parser.parse_args()
     config = load()
     if args.action == "get":
         value = config[args.values[0]]
         if isinstance(value, dict):
             value = value.get(args.values[1], "")
-        print(str(value).lower() if isinstance(value, bool) else value)
+        print(json.dumps(value) if isinstance(value, list) else str(value).lower() if isinstance(value, bool) else value)
     elif args.action == "url":
         parts = parse_pr(args.values[0], config)
         cli = parse_qs(urlsplit(args.values[0]).query).get("cli", [""])[0]
@@ -198,7 +294,7 @@ def main():
             raise ValueError("Unknown cli in PR URL")
         print("\t".join((*parts, cli)))
     elif args.action == "repo":
-        print(select_repo(config, args.values[0], args.values[1] if len(args.values) > 1 else None))
+        print(select_repo(config, args.values[0], args.values[1] if len(args.values) > 1 else None, args.clone))
     elif args.action == "remote":
         print(matching_remote(args.values[0], args.values[1], config["remote_host_aliases"]))
 

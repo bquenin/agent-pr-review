@@ -1,8 +1,10 @@
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -42,6 +44,31 @@ class ConfigTests(unittest.TestCase):
                 {"host_instructions": {"unknown.example": "text"}}):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 self.configure(invalid)
+
+    def test_clone_and_auto_review_settings(self):
+        hosts = ["github.com", "github.example.com"]
+        settings = self.configure({"github_hosts": hosts, "repo_roots": ["~/code"], "clone_root": "~/code/clones",
+            "clone_protocol": "https", "default_cli": "t3code", "auto_review_hosts": ["GitHub.Example.com"]})
+        self.assertEqual(settings["auto_review_hosts"], ["github.example.com"])
+        self.assertEqual(config.load()["auto_review_hosts"], ["github.example.com"])
+        self.assertEqual(self.configure({"clone_root": "~/code"})["clone_protocol"], "ssh")
+        for invalid in ({"clone_root": "relative/clones"}, {"clone_root": "~/elsewhere"},
+                {"clone_root": "~/code-other"}, {"clone_root": "~/code/a/b/c"}, {"clone_protocol": "git"},
+                {"auto_review_hosts": "github.com", "default_cli": "t3code"},
+                {"auto_review_hosts": [1], "default_cli": "t3code"},
+                {"auto_review_hosts": ["unknown.example"], "default_cli": "t3code"},
+                {"auto_review_hosts": ["github.com"]}, {"auto_review_hosts": ["github.com"], "default_cli": "claude"}):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                self.configure(invalid)
+
+    def test_timeout_kills_the_whole_process_group_and_keeps_partial_output(self):
+        started = time.monotonic()
+        with self.assertRaises(subprocess.TimeoutExpired) as raised:
+            # A surviving grandchild would hold stdout open for 30 seconds.
+            config.run_with_timeout(["sh", "-c", "echo started; sleep 30 & wait"], 0.5,
+                stdout=subprocess.PIPE, text=True)
+        self.assertLess(time.monotonic() - started, 10)
+        self.assertEqual(raised.exception.output, "started\n")
 
     def test_url_normalization_and_enterprise_hosts(self):
         settings = self.configure({"github_hosts": ["github.com", "github.example.com", "octocorp.ghe.com"]})

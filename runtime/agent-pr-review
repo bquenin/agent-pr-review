@@ -306,8 +306,10 @@ preferred_remote_name() {
     python3 "$CONFIG_HELPER" remote "$1" "$2"
 }
 
+# Without --repo and with no clone found, clone_root (if configured) gets a new
+# clone; the helper logs that step and bounds it with a timeout.
 select_repo_path() {
-    python3 "$CONFIG_HELPER" repo "$1/$2/$3" "${4:-}"
+    python3 "$CONFIG_HELPER" repo --clone "$1/$2/$3" "${4:-}"
 }
 
 # ---------------------------------------------------------------------------

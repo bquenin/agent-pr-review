@@ -225,6 +225,10 @@ review. It is a launch preview, not a read-only command.
 Repository discovery searches configured roots up to four levels deep and matches
 Git remotes, including clones with renamed directories. Ambiguous matches require
 `--repo PATH`; that clone must still have a remote matching the requested PR.
+When nothing matches and `clone_root` is set, the launcher makes a partial clone
+(`--filter=blob:none`, 15-minute limit) at `<clone_root>/<owner>/<repo>` and
+continues. It never replaces an existing directory at that path, never clones to
+resolve an ambiguous match, and removes only what a failed clone created.
 Fetch failures, dirty worktrees and diverged history stop the launch. A failure
 never falls back to the canonical checkout. Inspect a diverged worktree (for
 example after a force push), preserve any local commits, and remove that worktree
@@ -268,6 +272,9 @@ Unknown keys and invalid types fail validation. Settings are read on each launch
 | `host_instructions` | `{}` | Additional local instructions keyed by exact GitHub hostname |
 | `remote_host_aliases` | `{}` | Map Git SSH host aliases to their actual GitHub host |
 | `legacy_host` | empty | Host to which old, hostless sessions and worktrees belong |
+| `clone_root` | empty | Clone missing repositories here; inside a `repo_roots` entry, at most two levels deep |
+| `clone_protocol` | `ssh` | `ssh` (`git@host:owner/repo.git`) or `https` URLs for those clones |
+| `auto_review_hosts` | `[]` | Hosts whose review requests start reviews automatically; requires `default_cli` `t3code` |
 
 `AGENT_PR_REVIEW_RESOURCES` can relocate runtime resources inside Linux;
 use the same value for install and launch. The Mac native status bridge currently
@@ -350,6 +357,50 @@ python3 ~/.local/share/agent-pr-review/t3_monitor.py --status
 python3 ~/.local/share/agent-pr-review/t3_monitor.py --stop '<thread-uuid>'
 ```
 
+### Automatic reviews
+
+The runtime can start a T3 review whenever someone requests your review. T3 is
+the only backend that runs without a terminal, so this requires `default_cli`
+set to `t3code`. List the hosts to watch, and optionally a `clone_root` for
+repositories you have not cloned yet:
+
+```json
+{
+  "github_hosts": ["github.com", "github.example.com"],
+  "default_cli": "t3code",
+  "auto_review_hosts": ["github.example.com"],
+  "clone_root": "~/code/auto"
+}
+```
+
+Then install cron polling with `bash runtime/install.sh --enable-supervision`.
+Every minute, the poller searches each host for open, non-draft PRs that request
+your review and runs `agent-pr-review --cli t3code <url>` for each new request,
+one at a time.
+
+- Only direct requests count. Requests made to one of your teams are ignored.
+- Requests made before a host's first poll are skipped and logged, so enabling
+  this does not review your backlog. Launch those reviews yourself.
+- Each request starts one review. A re-request, such as after you reviewed and the
+  author pushed fixes, starts another; T3 resumes the PR's existing thread.
+- A failed launch is retried 5 and then 10 minutes later, then left until the PR
+  is requested again.
+- `posting_policy` and `monitor` apply unchanged. With `review-only`, the review
+  waits in T3 for you to read.
+
+Cron runs with the `PATH` of the shell that installed it, so `gh`, Node.js and
+`agent-pr-review` resolve as they do in your terminal; reinstall after moving
+them. Polling costs one search per host per minute, plus timeline reads for PRs
+whose request state may have changed. Inspect or remove it with:
+
+```bash
+python3 ~/.local/share/agent-pr-review/review_requests.py --status
+python3 ~/.local/share/agent-pr-review/review_requests.py --uninstall-cron
+```
+
+Launches, skipped requests, launcher output and errors are appended to
+`~/.local/share/agent-pr-review/review-requests/poll.log`.
+
 ## Migrate an existing installation
 
 Keep existing clone paths, installed state and T3 settings. Before reinstalling:
@@ -404,7 +455,8 @@ selected transport (`devcontainer exec`, SSH, or local),
 output before changing permissions.
 
 To uninstall, first stop running review sessions/watchers and remove this tool's
-marked T3 monitor line from `crontab -e` if supervision was enabled. Then remove:
+marked T3 monitor and review request lines from `crontab -e` if supervision was
+enabled. Then remove:
 
 - Mac: `~/Applications/AgentPRReview.app`,
   `~/Library/Application Support/AgentPRReview`,
