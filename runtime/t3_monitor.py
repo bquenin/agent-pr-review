@@ -228,9 +228,14 @@ def deliver(client, state, persist, timestamp):
     session = thread.get("session") or {}
     delivery = state.get("delivery")
     if delivery:
+        moved_on = latest.get("turnId") and latest["turnId"] != delivery["previousTurnId"]
         seen = any(m["id"] == delivery["messageId"] for m in thread.get("messages", []))
-        if (seen and latest.get("turnId") and latest["turnId"] != delivery["previousTurnId"]
-                and latest.get("state") in ("running", "completed")):
+        if not seen and moved_on:
+            # Later turns push the delivered message out of the one-turn window.
+            wider = client.request(f"/api/orchestration/threads/{state['threadId']}?turnLimit=50")["thread"]
+            seen = any(m["id"] == delivery["messageId"] for m in wider.get("messages", []))
+        # An interrupted turn still received the message; the user took over.
+        if seen and moved_on and latest.get("state") in ("running", "completed", "interrupted"):
             for key, value in delivery["events"].items():
                 if state["pending"].get(key) == value:
                     del state["pending"][key]
@@ -239,8 +244,19 @@ def deliver(client, state, persist, timestamp):
                 state.update(enabled=False, stoppedReason="PR " + state["closed"])
             persist()
             return
-        if (session.get("status") == "error" and session.get("updatedAt", "") >= delivery["createdAt"]
-                or seen and latest.get("turnId") != delivery["previousTurnId"] and latest.get("state") == "error"):
+        changed = session.get("updatedAt", "") >= delivery["createdAt"]
+        if (session.get("status") == "error" and changed
+                or seen and moved_on and latest.get("state") == "error"
+                # Settling or stopping the thread right after a failed start
+                # replaces the session error with "stopped" before we poll.
+                or seen and not moved_on and session.get("status") == "stopped" and changed):
+            if state["closed"]:
+                # The PR is finished, so a retry would only reopen a settled
+                # thread to repeat the start that just failed.
+                state.update(delivery=None, enabled=False,
+                    stoppedReason=f"PR {state['closed']}; the final turn did not start")
+                persist()
+                return
             # A rejected provider start has a durable command receipt. Retry with
             # a fresh command; replaying the rejected start would never wake T3.
             state.update(delivery=None, lastError=session.get("lastError") or "T3 turn failed to start")
