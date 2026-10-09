@@ -216,19 +216,26 @@ agent-pr-review --cli claude 'https://github.example.com/team/repo/pull/42'
 agent-pr-review --cli agent --repo ~/code/my-clone 'https://github.com/owner/repo/pull/42'
 agent-pr-review --no-tmux 'https://github.com/owner/repo/pull/42'
 agent-pr-review --print-cmd 'https://github.com/owner/repo/pull/42'
+agent-pr-review --cli t3code --rereview 'https://github.com/owner/repo/pull/42'
 ```
 
 `--print-cmd` prepares and fetches a real worktree and prints the assembled prompt
 and command; it does not start an agent, create a chat, accept trust, or post a
 review. It is a launch preview, not a read-only command.
 
+`--rereview` applies to T3: when the PR's review thread has finished, it starts
+another review turn instead of reusing the thread. A review that is still running
+is left alone. Automatic reviews pass it; the browser button does not.
+
 Repository discovery searches configured roots up to four levels deep and matches
 Git remotes, including clones with renamed directories. Ambiguous matches require
 `--repo PATH`; that clone must still have a remote matching the requested PR.
 When nothing matches and `clone_root` is set, the launcher makes a partial clone
 (`--filter=blob:none`, 15-minute limit) at `<clone_root>/<owner>/<repo>` and
-continues. It never replaces an existing directory at that path, never clones to
-resolve an ambiguous match, and removes only what a failed clone created.
+continues. It clones into a temporary sibling and renames it into place, so two
+concurrent launches reuse whichever clone finishes first. It never replaces an
+existing directory at that path, never clones to resolve an ambiguous match, and
+removes only what a failed clone created.
 Fetch failures, dirty worktrees and diverged history stop the launch. A failure
 never falls back to the canonical checkout. Inspect a diverged worktree (for
 example after a force push), preserve any local commits, and remove that worktree
@@ -347,10 +354,10 @@ is configured anywhere, the helper reports an actionable error. Existing threads
 retain their T3 model/runtime settings. T3 permissions are controlled by T3;
 `trust_worktrees` applies to the two terminal CLIs.
 
-T3 reuses completed threads without sending duplicate prompts. Status appears on
-the browser button. When monitoring is enabled, commits or feedback start another
-turn after the current turn finishes. When disabled, launching the PR stops its
-saved watcher. Inspect or stop watchers with:
+T3 reuses completed threads without sending duplicate prompts unless `--rereview`
+is given. Status appears on the browser button. When monitoring is enabled,
+commits or feedback start another turn after the current turn finishes. When
+disabled, launching the PR stops its saved watcher. Inspect or stop watchers with:
 
 ```bash
 python3 ~/.local/share/agent-pr-review/t3_monitor.py --status
@@ -375,14 +382,18 @@ repositories you have not cloned yet:
 
 Then install cron polling with `bash runtime/install.sh --enable-supervision`.
 Every minute, the poller searches each host for open, non-draft PRs that request
-your review and runs `agent-pr-review --cli t3code <url>` for each new request,
-one at a time.
+your review and runs `agent-pr-review --cli t3code --rereview <url>` for each new
+request, one at a time.
 
 - Only direct requests count. Requests made to one of your teams are ignored.
 - Requests made before a host's first poll are skipped and logged, so enabling
   this does not review your backlog. Launch those reviews yourself.
 - Each request starts one review. A re-request, such as after you reviewed and the
-  author pushed fixes, starts another; T3 resumes the PR's existing thread.
+  author pushed fixes, starts another turn in the PR's existing T3 thread. If
+  that thread is still reviewing, it carries on and sees the current PR state.
+- Switching accounts with `gh auth switch` restarts the host's cutoff: the new
+  account's earlier requests are skipped, and the old account's records for that
+  host are dropped.
 - A failed launch is retried 5 and then 10 minutes later, then left until the PR
   is requested again.
 - `posting_policy` and `monitor` apply unchanged. With `review-only`, the review
@@ -390,16 +401,19 @@ one at a time.
 
 Cron runs with the `PATH` of the shell that installed it, so `gh`, Node.js and
 `agent-pr-review` resolve as they do in your terminal; reinstall after moving
-them. Polling costs one search per host per minute, plus timeline reads for PRs
-whose request state may have changed. Inspect or remove it with:
+them. Polling costs one user lookup and one search per host per minute (one per
+100 results), plus timeline reads for PRs whose request state may have changed.
+If GitHub reports incomplete search results, the PRs it did return are reviewed
+and the host shows an error until a complete search. Inspect or remove it with:
 
 ```bash
 python3 ~/.local/share/agent-pr-review/review_requests.py --status
 python3 ~/.local/share/agent-pr-review/review_requests.py --uninstall-cron
 ```
 
-Launches, skipped requests, launcher output and errors are appended to
-`~/.local/share/agent-pr-review/review-requests/poll.log`.
+Launches (with what T3 did: `started`, `resumed`, `rereviewed` or
+`already-running`), skipped requests, account switches, launcher output and errors
+are appended to `~/.local/share/agent-pr-review/review-requests/poll.log`.
 
 ## Migrate an existing installation
 

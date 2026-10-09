@@ -110,6 +110,17 @@ class LauncherTests(unittest.TestCase):
         self.assertIn(".agent-pr-review/worktrees/pr-42", result.stdout)
         self.assertLess(result.stdout.index("--stop-worktree"), result.stdout.index("worktree remove"))
 
+    def test_rereview_is_passed_to_t3_only_when_requested(self):
+        self.settings.update(default_cli="t3code")
+        self.save_config()
+        for name, content in (("t3-review.py", "import sys; print(sys.stdin.read())\n"), ("t3_monitor.py", "")):
+            (self.home / "resources" / name).write_text(content)
+        for args, expected in (((), False), (("--rereview",), True)):
+            with self.subTest(args=args):
+                payload = json.loads(self.launch("github.com", *args).stdout)
+                self.assertIs(payload["rereview"], expected)
+                self.assertTrue(payload["resumePrompt"].startswith("Continue this PR review."))
+
     def test_ambiguity_requires_explicit_repo_and_wrong_remote_is_rejected(self):
         other = self.home / "code/duplicate"
         self.git("clone", str(self.bare), str(other))

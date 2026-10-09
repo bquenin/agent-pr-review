@@ -32,11 +32,12 @@ print(json.dumps(responses[key]))
 """
 FAKE_LAUNCHER = """#!/bin/sh
 printf '%s\\n' "$*" >>"$FAKE_LAUNCHES"
-echo "agent-pr-review: Received URL: $3"
+echo "agent-pr-review: Received URL: $4"
 if [ "${FAKE_LAUNCH_EXIT:-0}" != 0 ]; then
     echo "agent-pr-review: T3 server is not running" >&2
+    exit "$FAKE_LAUNCH_EXIT"
 fi
-exit "${FAKE_LAUNCH_EXIT:-0}"
+echo '{"threadId": "thread", "action": "'"${FAKE_LAUNCH_ACTION:-started}"'", "monitor": null}'
 """
 
 
@@ -72,6 +73,8 @@ class PollTests(unittest.TestCase):
         self.logins = {HOST: "Reviewer", OTHER: "reviewer"}
         self.open = {HOST: {}, OTHER: {}}  # Search results: number -> timeline pages.
         self.unreadable = set()  # PR numbers whose timeline request fails.
+        self.page_size = 100  # Search results per page.
+        self.incomplete = False  # Whether GitHub flags a search page as incomplete.
 
     def configure(self, hosts):
         self.config.write_text(json.dumps({"github_hosts": ["github.com", HOST, OTHER],
@@ -86,8 +89,11 @@ class PollTests(unittest.TestCase):
             if self.logins.get(host):
                 responses[f"{host} user"] = {"login": self.logins[host]}
             # A new review request bumps the PR's updated_at.
-            responses[f"{host} search/issues"] = {"items": [{"html_url": f"https://{host}/Team/Repo/pull/{n}",
-                "updated_at": max(e["created_at"] for page in pages for e in page)} for n, pages in prs.items()]}
+            items = [{"html_url": f"https://{host}/Team/Repo/pull/{n}",
+                "updated_at": max(e["created_at"] for page in pages for e in page)} for n, pages in prs.items()]
+            responses[f"{host} search/issues"] = [{"incomplete_results": self.incomplete,
+                "items": items[start:start + self.page_size]}
+                for start in range(0, max(len(items), 1), self.page_size)]
             for number, pages in prs.items():
                 if number not in self.unreadable:
                     responses[f"{host} repos/team/repo/issues/{number}/timeline"] = pages
@@ -121,7 +127,7 @@ class PollTests(unittest.TestCase):
         self.poll(0)
         self.request(2, [requested(at(0))], [requested("2026-10-01T00:00:30Z")])
         self.poll(1)
-        self.assertEqual(self.launches(), [f"--cli t3code https://{HOST}/team/repo/pull/2"])
+        self.assertEqual(self.launches(), [f"--cli t3code --rereview https://{HOST}/team/repo/pull/2"])
         self.poll(2)
         self.poll(3)
         self.assertEqual(self.timeline_calls(), 1)  # An unchanged PR is not refetched every minute.
@@ -141,9 +147,57 @@ class PollTests(unittest.TestCase):
         del self.open[HOST][3]  # The submitted review removed the request.
         self.poll(3)
         self.request(3, [requested(at(1)), requested(at(4))])
-        self.poll(5)
-        self.assertEqual(len(self.launches()), 2)
+        # Every launch passes --rereview, so T3 reviews a finished thread again.
+        with patch.dict(os.environ, FAKE_LAUNCH_ACTION="rereviewed"):
+            self.poll(5)
+        self.assertEqual(self.launches(), [f"--cli t3code --rereview https://{HOST}/team/repo/pull/3"] * 2)
         self.assertEqual(self.state()["reviews"][f"{HOST}/team/repo/pull/3"]["requestedAt"], at(4))
+        self.assertIn(f"launched https://{HOST}/team/repo/pull/3 (requested {at(1)}, attempt 1/3, T3 started)",
+            self.log())
+        self.assertIn(f"launched https://{HOST}/team/repo/pull/3 (requested {at(4)}, attempt 1/3, T3 rereviewed)",
+            self.log())
+
+    def test_search_reads_every_page_and_reviews_incomplete_results(self):
+        self.poll(0)
+        self.page_size = 1
+        for number in (14, 15, 16):
+            self.request(number, [requested(at(1))])
+        self.poll(2)
+        self.assertEqual(self.launches(), [f"--cli t3code --rereview https://{HOST}/team/repo/pull/{n}"
+            for n in (14, 15, 16)])
+        searches = [json.loads(line) for line in self.calls.read_text().splitlines() if "search/issues" in line]
+        self.assertTrue(all("--paginate" in call and "--slurp" in call for call in searches))
+        self.assertIsNone(self.state()["lastError"])
+        self.incomplete = True
+        self.request(17, [requested(at(3))])
+        self.poll(4)
+        self.assertEqual(len(self.launches()), 4)
+        self.assertIn(f"{HOST}: search returned incomplete results", self.state()["lastError"])
+        self.assertIn(f"error {HOST}: search returned incomplete results", self.log())
+
+    def test_switching_accounts_restarts_the_cutoff_for_the_new_login(self):
+        self.poll(0)
+        self.request(18, [requested(at(1))])
+        self.poll(2)
+        # gh auth switch: the search now returns the new account's requests.
+        self.logins[HOST] = "Second-Account"
+        self.open[HOST] = {}
+        self.request(19, [requested(at(1), "second-account")])
+        self.request(18, [requested(at(1)), requested(at(2), "second-account")])
+        self.poll(3)
+        self.assertEqual(len(self.launches()), 1)  # Only the old account's review.
+        self.assertEqual(self.state()["hosts"][HOST], {"startedAt": at(3), "login": "Second-Account"})
+        self.assertEqual(self.log().count(f"account on {HOST} changed from Reviewer to Second-Account"), 1)
+        self.request(20, [requested(at(4), "second-account")])
+        self.request(18, [requested(at(1)), requested(at(2), "second-account"), requested(at(4), "second-account")])
+        self.poll(5)
+        self.poll(6)
+        self.assertEqual(self.launches()[1:], [f"--cli t3code --rereview https://{HOST}/team/repo/pull/{n}"
+            for n in (18, 20)])
+        reviews = self.state()["reviews"]
+        self.assertEqual(reviews[f"{HOST}/team/repo/pull/19"]["result"], "skipped")
+        self.assertEqual(reviews[f"{HOST}/team/repo/pull/18"]["requestedAt"], at(4))
+        self.assertEqual(self.log().count("account on"), 1)
 
     def test_only_direct_requests_for_this_user_are_considered(self):
         self.poll(0)
@@ -188,7 +242,7 @@ class PollTests(unittest.TestCase):
         self.request(6, [requested(at(1))], host=OTHER)
         self.poll(2)
         self.poll(3)
-        self.assertEqual(self.launches(), [f"--cli t3code https://{OTHER}/team/repo/pull/6"])
+        self.assertEqual(self.launches(), [f"--cli t3code --rereview https://{OTHER}/team/repo/pull/6"])
         self.assertIn(HOST, self.state()["lastError"])
         self.assertEqual(self.log().count(f"error {HOST}"), 1)
 
@@ -199,7 +253,7 @@ class PollTests(unittest.TestCase):
         self.request(13, [requested(at(1))])
         self.unreadable.add(12)
         self.poll(2)
-        self.assertEqual(self.launches(), [f"--cli t3code https://{HOST}/team/repo/pull/{n}" for n in (11, 13)])
+        self.assertEqual(self.launches(), [f"--cli t3code --rereview https://{HOST}/team/repo/pull/{n}" for n in (11, 13)])
         self.assertIn(f"{HOST}/team/repo/pull/12", self.state()["lastError"])
 
     def test_disabled_poller_does_nothing_and_invalid_config_is_recorded(self):
@@ -226,6 +280,35 @@ class PollTests(unittest.TestCase):
         poller.save(self.root / "state.json", state)
         self.poll(3)
         self.assertEqual(list(self.state()["reviews"]), [f"{HOST}/team/repo/pull/8"])
+
+    def test_only_hosts_searched_successfully_are_pruned(self):
+        self.configure([HOST, OTHER])
+        self.poll(0)
+        self.request(21, [requested(at(1))])
+        self.request(22, [requested(at(1))], host=OTHER)
+        self.poll(2)
+        self.open = {HOST: {}, OTHER: {}}
+        def age():
+            state = self.state()
+            for entry in state["reviews"].values():
+                entry["seenAt"] = "2026-08-01T00:00:00Z"
+            poller.save(self.root / "state.json", state)
+        keys = [f"{HOST}/team/repo/pull/21", f"{OTHER}/team/repo/pull/22"]
+        age()
+        self.logins[HOST] = None  # Failing host.
+        self.configure([HOST])  # Disabled host.
+        self.poll(3)
+        self.assertEqual(list(self.state()["reviews"]), keys)
+        self.incomplete = True  # A partial search may have missed the request.
+        self.logins[HOST] = "reviewer"
+        self.poll(4)
+        self.assertEqual(list(self.state()["reviews"]), keys)
+        self.incomplete = False
+        self.poll(5)
+        self.assertEqual(list(self.state()["reviews"]), keys[1:])
+        self.configure([HOST, OTHER])
+        self.poll(6)
+        self.assertEqual(self.state()["reviews"], {})
 
     def test_status_lists_recent_reviews_first(self):
         self.poll(0)

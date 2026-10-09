@@ -12,9 +12,11 @@
 # attachment is the default; tmux_control_mode enables iTerm integration explicitly.
 #
 # Usage: agent-pr-review [--print-cmd] [--cli claude|agent|t3code]
-#                        [--no-tmux] [--tmux-session NAME] [--repo PATH] <pr-url>
+#                        [--no-tmux] [--tmux-session NAME] [--repo PATH] [--rereview] <pr-url>
 #   <pr-url> is https://<host>/<owner>/<repo>/pull/<number>
 #   --cli selects the review backend (default: agent = Cursor CLI)
+#   --rereview starts another T3 turn when the PR's review thread is finished
+#   (used for new review requests); without it a finished T3 review is reused.
 #   --print-cmd does all preparation but prints the launch command instead of
 #   running it (test mode). It never delegates to tmux.
 #   --no-tmux runs the review in the current terminal instead of a tmux window.
@@ -101,10 +103,11 @@ log() {
 
 usage() {
     printf 'Usage: agent-pr-review [--print-cmd] [--cli claude|agent|t3code] [--no-tmux]\n' >&2
-    printf '                       [--tmux-session NAME] [--repo PATH] <pr-url>\n' >&2
+    printf '                       [--tmux-session NAME] [--repo PATH] [--rereview] <pr-url>\n' >&2
     printf '       <pr-url> must look like https://<host>/<owner>/<repo>/pull/<number>\n' >&2
     printf '       --cli overrides default_cli in config.json (agent, claude, t3code)\n' >&2
     printf '       --print-cmd prepares everything and prints the launch command (no tmux)\n' >&2
+    printf '       --rereview reviews a finished T3 review thread again instead of reusing it\n' >&2
     printf '       --no-tmux runs the review in this terminal instead of a tmux window\n' >&2
     printf '       --tmux-session sets the session to run in (env AGENT_PR_REVIEW_TMUX_SESSION,\n' >&2
     printf '                      default %s); skipped when $TMUX is already set\n' "$DEFAULT_TMUX_SESSION" >&2
@@ -863,7 +866,7 @@ main() {
         export NODE_EXTRA_CA_CERTS="$extra_ca"
     fi
     local print_cmd=0 url_arg="" review_cli="$DEFAULT_REVIEW_CLI" arg explicit_cli=0 explicit_repo="" expect_repo=0
-    local use_tmux=1
+    local use_tmux=1 rereview=0
     local tmux_session="${AGENT_PR_REVIEW_TMUX_SESSION:-$DEFAULT_TMUX_SESSION}"
     local expect_cli_value=0 expect_tmux_session=0
     for arg in "$@"; do
@@ -885,6 +888,7 @@ main() {
         case "$arg" in
             --print-cmd) print_cmd=1 ;;
             --no-tmux) use_tmux=0 ;;
+            --rereview) rereview=1 ;;
             --tmux-session)
                 expect_tmux_session=1
                 ;;
@@ -1032,9 +1036,9 @@ $prompt"
         # Send structured data to the helper over stdin; never evaluate the prompt.
         local -a t3_args=()
         [ "$print_cmd" -eq 0 ] || t3_args+=(--print-cmd)
-        python3 - "$repo_path" "$wt_path" "$pr_url" "$repo_name" "$pr_number" "$T3_REVIEW_MODEL" "$T3_REVIEW_EFFORT" "$prompt" "$resume_prompt" "$MONITOR_ENABLED" <<'PYT3' | python3 "$t3_helper" "${t3_args[@]}"
+        python3 - "$repo_path" "$wt_path" "$pr_url" "$repo_name" "$pr_number" "$T3_REVIEW_MODEL" "$T3_REVIEW_EFFORT" "$prompt" "$resume_prompt" "$MONITOR_ENABLED" "$rereview" <<'PYT3' | python3 "$t3_helper" "${t3_args[@]}"
 import json, subprocess, sys
-root, worktree, url, repo, number, model, effort, prompt, resume, monitor = sys.argv[1:]
+root, worktree, url, repo, number, model, effort, prompt, resume, monitor, rereview = sys.argv[1:]
 branch = subprocess.check_output(["git", "-C", worktree, "branch", "--show-current"], text=True).strip()
 head = subprocess.check_output(["git", "-C", worktree, "rev-parse", "HEAD"], text=True).strip()
 print(json.dumps({"repoPath": root, "worktreePath": worktree, "prUrl": url,
@@ -1042,7 +1046,8 @@ print(json.dumps({"repoPath": root, "worktreePath": worktree, "prUrl": url,
     "branch": branch or None, "title": f"Review {repo} #{number}",
     "defaultModelSelection": ({"instanceId": "cursor", "model": model,
         "options": [{"id": "reasoning", "value": effort}] if effort else []} if model else None),
-    "prompt": prompt, "resumePrompt": resume, "monitorEnabled": monitor == "true"}))
+    "prompt": prompt, "resumePrompt": resume, "monitorEnabled": monitor == "true",
+    "rereview": rereview == "1"}))
 PYT3
         exit "${PIPESTATUS[1]}"
     fi

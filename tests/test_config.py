@@ -70,6 +70,49 @@ class ConfigTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 10)
         self.assertEqual(raised.exception.output, "started\n")
 
+    def test_concurrent_clone_never_removes_the_other_launchs_checkout(self):
+        home = self.home.resolve()
+        env = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": str(home / ".gitconfig")}
+        def git(*args):
+            subprocess.run(["git", *args], check=True, capture_output=True, env={**config.os.environ, **env})
+        seed, bare = home / "seed", home / "upstream.git"
+        git("init", "-b", "main", str(seed))
+        git("-C", str(seed), "-c", "user.name=Test", "-c", "user.email=test@example.com",
+            "commit", "--allow-empty", "-m", "base")
+        git("clone", "--bare", str(seed), str(bare))
+        settings = self.configure({"github_hosts": ["github.com", "github.example.com"],
+            "repo_roots": [str(home / "code")], "clone_root": str(home / "code/clones"), "clone_protocol": "https"})
+        run = config.run_with_timeout
+        def real_run(command, timeout, **kwargs):
+            return run(command, timeout, **{**kwargs, "stderr": subprocess.DEVNULL})
+        for outcome, repo in (("succeeds", "first"), ("fails", "second")):
+            expected = f"github.example.com/team/{repo}"
+            git("config", "--global", "--add", f"url.{bare.as_uri()}.insteadOf", f"https://{expected}.git")
+            target = home / "code/clones/team" / repo
+            def racing(command, *args, **kwargs):
+                # The other launch (a click, or the poller) finishes first while this
+                # clone is still running, and the user starts working in its checkout.
+                with patch.object(config, "run_with_timeout", real_run):
+                    self.assertEqual(config.clone_repo(settings, expected), target)
+                (target / "notes.txt").write_text("uncommitted\n")
+                if outcome == "succeeds":
+                    return real_run(command, *args, **kwargs)
+                Path(command[-1]).mkdir()
+                (Path(command[-1]) / "partial").write_text("")
+                return subprocess.CompletedProcess(command, 128)
+            with self.subTest(outcome=outcome), open(config.os.devnull, "w") as quiet, \
+                    patch.dict(config.os.environ, env), patch.object(config.sys, "stderr", quiet), \
+                    patch.object(config, "run_with_timeout", side_effect=racing):
+                if outcome == "succeeds":
+                    self.assertEqual(config.clone_repo(settings, expected), target)
+                else:
+                    with self.assertRaisesRegex(ValueError, "git clone of .* failed"):
+                        config.clone_repo(settings, expected)
+                self.assertEqual((target / "notes.txt").read_text(), "uncommitted\n")
+                self.assertEqual(config.matching_remote(target, expected, {}), "origin")
+                # The loser's temporary clone is gone; nothing else was touched.
+                self.assertEqual({p.name for p in target.parent.iterdir()}, {"first", repo})
+
     def test_url_normalization_and_enterprise_hosts(self):
         settings = self.configure({"github_hosts": ["github.com", "github.example.com", "octocorp.ghe.com"]})
         for host in settings["github_hosts"]:

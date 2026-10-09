@@ -2,8 +2,9 @@
 """Start T3 reviews automatically when someone requests your review.
 
 Cron runs --poll every minute. Only direct review requests made after a host's
-first poll start a review; a later re-request starts another one. Launches use
-the installed agent-pr-review launcher, so the configured posting policy applies.
+first poll (or after switching its gh account) start a review; a later
+re-request starts another one. Launches use the installed agent-pr-review
+launcher, so the configured posting policy applies.
 """
 import argparse
 import datetime
@@ -102,8 +103,9 @@ def gh(host, endpoint, *options):
 
 
 def search(host):
-    """Open, non-draft PRs that request the user's review directly."""
-    return gh(host, "search/issues", "-X", "GET", "-f", "q=" + QUERY, "-f", "per_page=100")["items"]
+    """Open, non-draft PRs that request the user's review directly, and whether GitHub returned all of them."""
+    pages = gh(host, "search/issues", "-X", "GET", "-f", "q=" + QUERY, "-f", "per_page=100", "--paginate", "--slurp")
+    return [item for page in pages for item in page["items"]], not any(page.get("incomplete_results") for page in pages)
 
 
 def identify(host, item, config):
@@ -128,7 +130,8 @@ def launch(url):
     """Run the installed launcher once; return (succeeded, combined output, failure reason)."""
     launcher = shutil.which("agent-pr-review") or str(Path.home() / ".local/bin/agent-pr-review")
     try:
-        result = review_config.run_with_timeout([launcher, "--cli", "t3code", url], LAUNCH_TIMEOUT_SECONDS,
+        # --rereview: a request after a finished review must start another pass.
+        result = review_config.run_with_timeout([launcher, "--cli", "t3code", "--rereview", url], LAUNCH_TIMEOUT_SECONDS,
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             cwd=Path.home())
     except subprocess.TimeoutExpired as error:
@@ -136,6 +139,18 @@ def launch(url):
     except OSError as error:
         return False, "", str(error)
     return result.returncode == 0, result.stdout, f"exit {result.returncode}"
+
+
+def launch_action(output):
+    """What T3 did (started, resumed, rereviewed, already-running...), from the launcher's final JSON line."""
+    for line in reversed(output.splitlines()):
+        try:
+            result = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(result, dict) and isinstance(result.get("action"), str):
+            return result["action"]
+    return None
 
 
 def consider(root, state, key, url, updated, cutoff, login, stamp, persist):
@@ -164,7 +179,9 @@ def consider(root, state, key, url, updated, cutoff, login, stamp, persist):
     attempt = f"attempt {entry['attempts']}/{MAX_ATTEMPTS}"
     if succeeded:
         entry.update(result="launched", lastError=None)
-        log(root, f"launched {url} (requested {entry['requestedAt']}, {attempt})", output)
+        action = launch_action(output)
+        log(root, f"launched {url} (requested {entry['requestedAt']}, {attempt}"
+            + (f", T3 {action})" if action else ")"), output)
     else:
         lines = [line for line in output.splitlines() if line.strip()]
         entry.update(result="failed", lastError="\n".join(lines[-ERROR_LINES:]) or reason)
@@ -200,17 +217,33 @@ def poll_locked(root, config_file, stamp):
     state.setdefault("hosts", {})
     state.setdefault("reviews", {})
     returned = set()
+    searched = set()  # Hosts whose complete search lets us prune their unreturned records.
     for host in config["auto_review_hosts"] if config else []:
         # Each host has its own go-live cutoff, so adding a host later does not
         # review everything requested there since the first poll.
         host_state = state["hosts"].setdefault(host, {"startedAt": stamp})
         try:
-            if not host_state.get("login"):
-                host_state["login"] = gh(host, "user")["login"]
-            items = search(host)
+            # Resolved every poll: gh auth switch changes whose requests we search.
+            login = gh(host, "user")["login"]
+            if host_state.get("login") and host_state["login"].lower() != login.lower():
+                # The new account goes live now, like a newly added host. Its
+                # records are dropped: they hold the old account's requests and
+                # would hide or misdate the new account's.
+                log(root, f"account on {host} changed from {host_state['login']} to {login}; "
+                    "requests made before now are not reviewed automatically")
+                host_state["startedAt"] = stamp
+                for key in [key for key in state["reviews"] if key.startswith(host + "/")]:
+                    del state["reviews"][key]
+            host_state["login"] = login
+            items, complete = search(host)
         except ERRORS as error:
             errors[host] = str(error)
             continue
+        if complete:
+            searched.add(host)
+        else:
+            # GitHub timed out part of the search; review what it found and retry the rest next poll.
+            errors[host] = "search returned incomplete results"
         for item in items:
             key = f"{host} search result"
             try:
@@ -221,7 +254,9 @@ def poll_locked(root, config_file, stamp):
             except ERRORS as error:
                 errors[key] = str(error)
     for key, entry in list(state["reviews"].items()):
-        if key not in returned and parse(stamp) - parse(entry["seenAt"]) > PRUNE_AFTER:
+        # A disabled or failing host's records stay until its search succeeds again.
+        if (key.split("/")[0] in searched and key not in returned
+                and parse(stamp) - parse(entry["seenAt"]) > PRUNE_AFTER):
             del state["reviews"][key]
     previous = state.get("errors") or {}
     for source, message in errors.items():

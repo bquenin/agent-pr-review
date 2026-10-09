@@ -10,6 +10,7 @@ import signal
 import subprocess
 import sys
 from urllib.parse import parse_qs, urlsplit
+import uuid
 
 
 DEFAULTS = {
@@ -205,6 +206,16 @@ def clone_url(config, host, owner, repo):
     return f"git@{host}:{owner}/{repo}.git"
 
 
+def existing_clone(config, target, expected):
+    # Discovery can miss a clone below another checkout; reuse it, but never
+    # replace a directory that belongs to something else.
+    with contextlib.suppress(ValueError, subprocess.CalledProcessError):
+        if (target / ".git").exists():
+            matching_remote(target, expected, config["remote_host_aliases"])
+            return target
+    raise ValueError(f"{target} exists and is not a clone of {expected}; move it or use --repo PATH")
+
+
 def clone_repo(config, expected):
     match = re.fullmatch(rf"([^/]+)/({COMPONENT})/({COMPONENT})", expected)
     if not match or not HOST.fullmatch(match[1]) or {match[2], match[3]} & {".", ".."}:
@@ -212,36 +223,45 @@ def clone_repo(config, expected):
     host, owner, repo = match.groups()
     target = Path(config["clone_root"]).expanduser().resolve() / owner / repo
     if target.exists() or target.is_symlink():
-        # Discovery can miss a clone below another checkout; reuse it, but never
-        # replace a directory that belongs to something else.
-        try:
-            if (target / ".git").exists():
-                matching_remote(target, expected, config["remote_host_aliases"])
-                return target
-        except (ValueError, subprocess.CalledProcessError):
-            pass
-        raise ValueError(f"{target} exists and is not a clone of {expected}; move it or use --repo PATH")
+        return existing_clone(config, target, expected)
     url = clone_url(config, host, owner, repo)
-    created = []  # Missing ancestors, deepest first, to remove again on failure.
+    # Another launch (a click and the review-request poller) can clone the same
+    # repository concurrently. Clone beside the target and rename it into place,
+    # so a failure only ever removes this attempt's own files.
+    temporary = target.parent / f".{repo}.clone-{uuid.uuid4().hex[:12]}"
+    missing = []
     for directory in (target.parent, *target.parent.parents):
         if directory.exists():
             break
-        created.append(directory)
-    target.parent.mkdir(parents=True, exist_ok=True)
+        missing.append(directory)
+    created = []  # Ancestors this attempt made, deepest first, to remove again on failure.
     print(f"agent-pr-review: Cloning {url} into {target}", file=sys.stderr, flush=True)
     try:
+        for directory in reversed(missing):
+            with contextlib.suppress(FileExistsError):
+                directory.mkdir()
+                created.insert(0, directory)
         # Progress goes to stderr: stdout carries only the selected path.
-        result = run_with_timeout(["git", "clone", "--filter=blob:none", url, str(target)],
+        result = run_with_timeout(["git", "clone", "--filter=blob:none", url, str(temporary)],
             CLONE_TIMEOUT_SECONDS, stdin=subprocess.DEVNULL, stdout=sys.stderr,
             env=dict(os.environ, GIT_TERMINAL_PROMPT="0"))
         if result.returncode:
             raise ValueError(f"git clone of {url} failed (exit {result.returncode})")
+        try:
+            # Atomic, and refuses a target that gained contents meanwhile (POSIX
+            # rename replaces at most an empty directory).
+            os.rename(temporary, target)
+        except OSError:
+            if not (target.exists() or target.is_symlink()):
+                raise
+            # Another launch finished first; use its clone if it is the same repository.
+            shutil.rmtree(temporary, ignore_errors=True)
+            return existing_clone(config, target, expected)
     except BaseException as error:
-        # The target did not exist before, so everything in it is ours.
-        shutil.rmtree(target, ignore_errors=True)
+        shutil.rmtree(temporary, ignore_errors=True)
         for directory in created:
             with contextlib.suppress(OSError):
-                directory.rmdir()
+                directory.rmdir()  # Only while empty: a concurrent launch may be using it.
         if isinstance(error, subprocess.TimeoutExpired):
             raise ValueError(f"git clone of {url} timed out after {CLONE_TIMEOUT_SECONDS // 60} minutes") from None
         raise
