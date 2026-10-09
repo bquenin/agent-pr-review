@@ -19,6 +19,10 @@ import uuid
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 from review_config import load, parse_pr
 
+# Appended to the resume prompt when a new review request reopens a finished review.
+REREVIEW_REQUEST = ("A new review of this PR was requested. Review its current state again, "
+    "following the original review methodology and posting rules above.")
+
 
 def read_json(path, default=None):
     try:
@@ -235,18 +239,23 @@ def launch(client, payload, settings, config, environment_id):
             client.dispatch("thread.unarchive", threadId=thread_id)
         latest = thread.get("latestTurn") or {}
         session = thread.get("session") or {}
+        # A running review reads the PR's current state, including a new request.
         if latest.get("state") == "running" or session.get("activeTurnId") or session.get("status") in ("starting", "running"):
             return {"threadId": thread_id, "action": "already-running", "title": thread["title"]}
         # A completed review is waiting on the external watcher, not a new prompt.
         # A stopped turn in a still-ready session needs no recovery either.
         # main() still ensures its watcher is running, even after a host restart.
+        # A new review request (--rereview) asks for another pass all the same.
+        text, action = payload["resumePrompt"] if latest else payload["prompt"], "resumed"
         if (latest.get("state") == "completed" and session.get("status") != "error"
                 or latest.get("state") == "interrupted" and session.get("status") == "ready"):
-            return {"threadId": thread_id, "action": "reused", "title": thread["title"]}
+            if payload.get("rereview") is not True:
+                return {"threadId": thread_id, "action": "reused", "title": thread["title"]}
+            text, action = payload["resumePrompt"] + "\n\n" + REREVIEW_REQUEST, "rereviewed"
         start_turn(client, thread_id, previous_turn_id=latest.get("turnId"),
-            message={"messageId": str(uuid.uuid4()), "role": "user", "text": payload["resumePrompt"] if thread.get("latestTurn") else payload["prompt"], "attachments": []},
+            message={"messageId": str(uuid.uuid4()), "role": "user", "text": text, "attachments": []},
             runtimeMode=thread["runtimeMode"], interactionMode="default", createdAt=now())
-        return {"threadId": thread_id, "action": "resumed", "title": thread["title"]}
+        return {"threadId": thread_id, "action": action, "title": thread["title"]}
 
     project = select_project(snapshot["projects"], root, config)
     if project is None:

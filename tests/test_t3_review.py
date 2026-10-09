@@ -232,6 +232,41 @@ class LaunchTests(unittest.TestCase):
         self.assertEqual(len(self.client.commands), 3)
         self.assertEqual(self.client.snapshot, previous)
 
+    def test_rereview_starts_a_new_turn_on_a_finished_review(self):
+        first = self.launch()
+        thread = self.client.snapshot["threads"][0]
+        rereview = dict(PAYLOAD, rereview=True)
+        cases = (("completed", None, None), ("completed", "ready", None), ("interrupted", "ready", None),
+            ("completed", "stopped", "yesterday"))
+        for turn_state, session_status, archived in cases:
+            with self.subTest(turn_state=turn_state, session_status=session_status, archived=archived):
+                previous = thread["latestTurn"]["turnId"]
+                thread.update(latestTurn={"state": turn_state, "turnId": previous}, archivedAt=archived,
+                    session={"status": session_status} if session_status else None)
+                count = len(self.client.commands)
+                # Without --rereview a finished review is still reused untouched.
+                self.assertEqual(self.launch(dict(PAYLOAD, rereview=False))["action"], "reused")
+                thread["archivedAt"] = archived
+                result = self.launch(rereview)
+                self.assertEqual((result["threadId"], result["action"]), (first["threadId"], "rereviewed"))
+                turn = self.client.commands[-1]
+                self.assertEqual(turn["type"], "thread.turn.start")
+                self.assertEqual(turn["message"]["text"], PAYLOAD["resumePrompt"] + "\n\n" + t3.REREVIEW_REQUEST)
+                self.assertIn("review methodology and posting rules", turn["message"]["text"])
+                self.assertEqual(turn["runtimeMode"], "full-access")
+                self.assertNotEqual(thread["latestTurn"]["turnId"], previous)
+                self.assertEqual(len(self.client.commands), count + (3 if archived else 1))
+                # The new turn is running: another request leaves it alone.
+                self.assertEqual(self.launch(rereview)["action"], "already-running")
+                self.assertEqual(len(self.client.commands), count + (3 if archived else 1))
+
+    def test_rereview_resumes_a_failed_review_with_the_resume_prompt(self):
+        self.launch()
+        self.client.snapshot["threads"][0].update(latestTurn={"state": "error"}, session={"status": "error"})
+        result = self.launch(dict(PAYLOAD, rereview=True))
+        self.assertEqual(result["action"], "resumed")
+        self.assertEqual(self.client.commands[-1]["message"]["text"], PAYLOAD["resumePrompt"])
+
     def test_failed_or_interrupted_review_resumes_existing_thread(self):
         first = self.launch()
         thread = self.client.snapshot["threads"][0]

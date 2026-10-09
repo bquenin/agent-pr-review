@@ -1,8 +1,10 @@
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -42,6 +44,88 @@ class ConfigTests(unittest.TestCase):
                 {"host_instructions": {"unknown.example": "text"}}):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 self.configure(invalid)
+
+    def test_clone_and_auto_review_settings(self):
+        hosts = ["github.com", "github.example.com"]
+        settings = self.configure({"github_hosts": hosts, "repo_roots": ["~/code"], "clone_root": "~/code/clones",
+            "clone_protocol": "https", "default_cli": "t3code", "auto_review_hosts": ["GitHub.Example.com"]})
+        self.assertEqual(settings["auto_review_hosts"], ["github.example.com"])
+        self.assertEqual(config.load()["auto_review_hosts"], ["github.example.com"])
+        self.assertEqual(self.configure({"clone_root": "~/code"})["clone_protocol"], "ssh")
+        for invalid in ({"clone_root": "relative/clones"}, {"clone_root": "~/elsewhere"},
+                {"clone_root": "~/code-other"}, {"clone_root": "~/code/a/b/c"}, {"clone_protocol": "git"},
+                {"auto_review_hosts": "github.com", "default_cli": "t3code"},
+                {"auto_review_hosts": [1], "default_cli": "t3code"},
+                {"auto_review_hosts": ["unknown.example"], "default_cli": "t3code"},
+                {"auto_review_hosts": ["github.com"]}, {"auto_review_hosts": ["github.com"], "default_cli": "claude"}):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                self.configure(invalid)
+
+    def test_timeout_kills_the_whole_process_group_and_keeps_partial_output(self):
+        started = time.monotonic()
+        with self.assertRaises(subprocess.TimeoutExpired) as raised:
+            # A surviving grandchild would hold stdout open for 30 seconds.
+            config.run_with_timeout(["sh", "-c", "echo started; sleep 30 & wait"], 0.5,
+                stdout=subprocess.PIPE, text=True)
+        self.assertLess(time.monotonic() - started, 10)
+        self.assertEqual(raised.exception.output, "started\n")
+
+    def test_concurrent_clone_never_removes_the_other_launchs_checkout(self):
+        home = self.home.resolve()
+        env = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": str(home / ".gitconfig")}
+        def git(*args):
+            subprocess.run(["git", *args], check=True, capture_output=True, env={**config.os.environ, **env})
+        seed, bare = home / "seed", home / "upstream.git"
+        git("init", "-b", "main", str(seed))
+        git("-C", str(seed), "-c", "user.name=Test", "-c", "user.email=test@example.com",
+            "commit", "--allow-empty", "-m", "base")
+        git("clone", "--bare", str(seed), str(bare))
+        settings = self.configure({"github_hosts": ["github.com", "github.example.com"],
+            "repo_roots": [str(home / "code")], "clone_root": str(home / "code/clones"), "clone_protocol": "https"})
+        run = config.run_with_timeout
+        def real_run(command, timeout, **kwargs):
+            return run(command, timeout, **{**kwargs, "stderr": subprocess.DEVNULL})
+        for outcome, repo in (("succeeds", "first"), ("fails", "second")):
+            expected = f"github.example.com/team/{repo}"
+            git("config", "--global", "--add", f"url.{bare.as_uri()}.insteadOf", f"https://{expected}.git")
+            target = home / "code/clones/team" / repo
+            def racing(command, *args, **kwargs):
+                # The other launch (a click, or the poller) finishes first while this
+                # clone is still running, and the user starts working in its checkout.
+                with patch.object(config, "run_with_timeout", real_run):
+                    self.assertEqual(config.clone_repo(settings, expected), target)
+                (target / "notes.txt").write_text("uncommitted\n")
+                if outcome == "succeeds":
+                    return real_run(command, *args, **kwargs)
+                Path(command[-1]).mkdir()
+                (Path(command[-1]) / "partial").write_text("")
+                return subprocess.CompletedProcess(command, 128)
+            with self.subTest(outcome=outcome), open(config.os.devnull, "w") as quiet, \
+                    patch.dict(config.os.environ, env), patch.object(config.sys, "stderr", quiet), \
+                    patch.object(config, "run_with_timeout", side_effect=racing):
+                if outcome == "succeeds":
+                    self.assertEqual(config.clone_repo(settings, expected), target)
+                else:
+                    with self.assertRaisesRegex(ValueError, "git clone of .* failed"):
+                        config.clone_repo(settings, expected)
+                self.assertEqual((target / "notes.txt").read_text(), "uncommitted\n")
+                self.assertEqual(config.matching_remote(target, expected, {}), "origin")
+                # The loser's temporary clone is gone; nothing else was touched.
+                self.assertEqual({p.name for p in target.parent.iterdir()}, {"first", repo})
+
+    def test_discovery_skips_in_progress_clones(self):
+        settings = self.configure({"repo_roots": [str(self.home / "code")]})
+        expected = "github.com/team/repo"
+        for name, found in ((".repo.clone-0123456789ab", False), ("repo", True)):
+            checkout = self.home / "code/team" / name
+            subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+            subprocess.run(["git", "-C", str(checkout), "remote", "add", "origin", f"https://{expected}.git"], check=True)
+            with self.subTest(name=name):
+                if found:
+                    self.assertEqual(config.select_repo(settings, expected), checkout.resolve())
+                else:
+                    with self.assertRaisesRegex(ValueError, "found none"):
+                        config.select_repo(settings, expected)
 
     def test_url_normalization_and_enterprise_hosts(self):
         settings = self.configure({"github_hosts": ["github.com", "github.example.com", "octocorp.ghe.com"]})

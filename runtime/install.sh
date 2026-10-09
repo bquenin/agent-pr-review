@@ -17,6 +17,7 @@ install -m 0644 "$repo_root/lib/review_config.py" "$resource_dir/review_config.p
 install -m 0755 "$repo_root/runtime/agent-pr-review"            "$bin_dir/agent-pr-review"
 install -m 0755 "$repo_root/runtime/t3-review.py"                "$resource_dir/t3-review.py"
 install -m 0755 "$repo_root/runtime/t3_monitor.py"                "$resource_dir/t3_monitor.py"
+install -m 0755 "$repo_root/runtime/review_requests.py"          "$resource_dir/review_requests.py"
 install -m 0755 "$repo_root/runtime/pr-monitor.sh"              "$resource_dir/pr-monitor.sh"
 install -m 0644 "$repo_root/prompts/review-methodology.md" "$resource_dir/review-methodology.md"
 install -m 0644 "$repo_root/prompts/review-posting-rules.md" "$resource_dir/review-posting-rules.md"
@@ -25,6 +26,7 @@ echo "Installed:"
 echo "  $bin_dir/agent-pr-review"
 echo "  $resource_dir/t3-review.py"
 echo "  $resource_dir/t3_monitor.py"
+echo "  $resource_dir/review_requests.py"
 echo "  $resource_dir/pr-monitor.sh"
 echo "  $resource_dir/review-methodology.md"
 echo "  $resource_dir/review-posting-rules.md"
@@ -39,6 +41,18 @@ else
     echo "NOTE: T3 cron supervision is optional: runtime/install.sh --enable-supervision"
 fi
 python3 "$resource_dir/t3_monitor.py" --ensure
+
+# Automatic reviews poll for review requests from cron; the poller is idle
+# unless auto_review_hosts is configured.
+if [ "$(python3 "$resource_dir/review_config.py" get auto_review_hosts)" != "[]" ]; then
+    if [ "${1:-}" = "--enable-supervision" ] && command -v crontab >/dev/null 2>&1; then
+        if ! python3 "$resource_dir/review_requests.py" --install-cron; then
+            echo "WARNING: automatic review polling could not be installed; review requests will not start reviews." >&2
+        fi
+    else
+        echo "NOTE: automatic reviews need cron polling: runtime/install.sh --enable-supervision"
+    fi
+fi
 
 case ":$PATH:" in
     *":$bin_dir:"*) ;;
