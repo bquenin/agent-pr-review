@@ -39,6 +39,7 @@ HOST = re.compile(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-
 COMPONENT = r"[A-Za-z0-9_.-]+"
 PR_PATH = re.compile(rf"/({COMPONENT})/({COMPONENT})/pull/([1-9][0-9]*)(?:/(?:files|commits|checks))?/?")
 CLONE_TIMEOUT_SECONDS = 15 * 60
+TEMPORARY_CLONE = re.compile(rf"\.{COMPONENT}\.clone-[0-9a-f]{{12}}")
 
 
 def config_path():
@@ -286,7 +287,9 @@ def select_repo(config, expected, explicit=None, clone=False):
                     pass
                 dirs[:] = []
             else:
-                dirs[:] = [d for d in dirs if d not in (".git", ".agent-pr-review", ".venv", "node_modules")] if len(relative.parts) < 4 else []
+                # In-progress clones vanish when clone_repo renames them into place.
+                dirs[:] = [d for d in dirs if d not in (".git", ".agent-pr-review", ".venv", "node_modules")
+                    and not TEMPORARY_CLONE.fullmatch(d)] if len(relative.parts) < 4 else []
     if not candidates and clone and config["clone_root"]:
         return clone_repo(config, expected)
     if len(candidates) != 1:

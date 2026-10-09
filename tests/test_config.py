@@ -113,6 +113,20 @@ class ConfigTests(unittest.TestCase):
                 # The loser's temporary clone is gone; nothing else was touched.
                 self.assertEqual({p.name for p in target.parent.iterdir()}, {"first", repo})
 
+    def test_discovery_skips_in_progress_clones(self):
+        settings = self.configure({"repo_roots": [str(self.home / "code")]})
+        expected = "github.com/team/repo"
+        for name, found in ((".repo.clone-0123456789ab", False), ("repo", True)):
+            checkout = self.home / "code/team" / name
+            subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+            subprocess.run(["git", "-C", str(checkout), "remote", "add", "origin", f"https://{expected}.git"], check=True)
+            with self.subTest(name=name):
+                if found:
+                    self.assertEqual(config.select_repo(settings, expected), checkout.resolve())
+                else:
+                    with self.assertRaisesRegex(ValueError, "found none"):
+                        config.select_repo(settings, expected)
+
     def test_url_normalization_and_enterprise_hosts(self):
         settings = self.configure({"github_hosts": ["github.com", "github.example.com", "octocorp.ghe.com"]})
         for host in settings["github_hosts"]:
