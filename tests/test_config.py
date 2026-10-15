@@ -45,19 +45,13 @@ class ConfigTests(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 self.configure(invalid)
 
-    def test_clone_and_auto_review_settings(self):
-        hosts = ["github.com", "github.example.com"]
-        settings = self.configure({"github_hosts": hosts, "repo_roots": ["~/code"], "clone_root": "~/code/clones",
-            "clone_protocol": "https", "default_cli": "t3code", "auto_review_hosts": ["GitHub.Example.com"]})
-        self.assertEqual(settings["auto_review_hosts"], ["github.example.com"])
-        self.assertEqual(config.load()["auto_review_hosts"], ["github.example.com"])
+    def test_clone_settings(self):
+        settings = self.configure({"repo_roots": ["~/code"], "clone_root": "~/code/clones", "clone_protocol": "https"})
+        self.assertEqual((settings["clone_root"], settings["clone_protocol"]), ("~/code/clones", "https"))
+        self.assertEqual(config.load()["clone_protocol"], "https")
         self.assertEqual(self.configure({"clone_root": "~/code"})["clone_protocol"], "ssh")
         for invalid in ({"clone_root": "relative/clones"}, {"clone_root": "~/elsewhere"},
-                {"clone_root": "~/code-other"}, {"clone_root": "~/code/a/b/c"}, {"clone_protocol": "git"},
-                {"auto_review_hosts": "github.com", "default_cli": "t3code"},
-                {"auto_review_hosts": [1], "default_cli": "t3code"},
-                {"auto_review_hosts": ["unknown.example"], "default_cli": "t3code"},
-                {"auto_review_hosts": ["github.com"]}, {"auto_review_hosts": ["github.com"], "default_cli": "claude"}):
+                {"clone_root": "~/code-other"}, {"clone_root": "~/code/a/b/c"}, {"clone_protocol": "git"}):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 self.configure(invalid)
 
@@ -90,8 +84,8 @@ class ConfigTests(unittest.TestCase):
             git("config", "--global", "--add", f"url.{bare.as_uri()}.insteadOf", f"https://{expected}.git")
             target = home / "code/clones/team" / repo
             def racing(command, *args, **kwargs):
-                # The other launch (a click, or the poller) finishes first while this
-                # clone is still running, and the user starts working in its checkout.
+                # The other launch finishes first while this clone is still
+                # running, and the user starts working in its checkout.
                 with patch.object(config, "run_with_timeout", real_run):
                     self.assertEqual(config.clone_repo(settings, expected), target)
                 (target / "notes.txt").write_text("uncommitted\n")

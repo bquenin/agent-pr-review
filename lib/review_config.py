@@ -33,7 +33,6 @@ DEFAULTS = {
     "monitor": False,
     "clone_root": "",
     "clone_protocol": "ssh",
-    "auto_review_hosts": [],
 }
 HOST = re.compile(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*")
 COMPONENT = r"[A-Za-z0-9_.-]+"
@@ -112,14 +111,6 @@ def load(config_file=None):
             raise ValueError("clone_root must be inside a repo_roots entry, at most two levels deep")
     if config["clone_protocol"] not in ("ssh", "https"):
         raise ValueError("clone_protocol must be ssh or https")
-    if not all(isinstance(host, str) for host in config["auto_review_hosts"]):
-        raise ValueError("auto_review_hosts must be a list of hostnames")
-    config["auto_review_hosts"] = list(dict.fromkeys(h.lower() for h in config["auto_review_hosts"]))
-    if not set(config["auto_review_hosts"]) <= set(config["github_hosts"]):
-        raise ValueError("auto_review_hosts must be configured github_hosts")
-    if config["auto_review_hosts"] and config["default_cli"] != "t3code":
-        # Automatic launches run unattended; T3 is the only backend without a terminal.
-        raise ValueError("auto_review_hosts requires default_cli t3code")
     return config
 
 
@@ -226,7 +217,7 @@ def clone_repo(config, expected):
     if target.exists() or target.is_symlink():
         return existing_clone(config, target, expected)
     url = clone_url(config, host, owner, repo)
-    # Another launch (a click and the review-request poller) can clone the same
+    # Another launch (a second click or terminal) can clone the same
     # repository concurrently. Clone beside the target and rename it into place,
     # so a failure only ever removes this attempt's own files.
     temporary = target.parent / f".{repo}.clone-{uuid.uuid4().hex[:12]}"
